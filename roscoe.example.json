@@ -3,12 +3,19 @@
   "project": "roscoe.sh",
   "state_dir": "~/.roscoe",
   "env_file": "~/.roscoe/.env",
-
   "accounts": [
-    { "name": "primary", "kind": "claude-subscription", "token_ref": "keychain:roscoe-account-primary" },
-    { "name": "api-fallback", "kind": "anthropic-api-key", "token_ref": "env:ANTHROPIC_API_KEY", "enabled": false }
+    {
+      "name": "primary",
+      "kind": "claude-subscription",
+      "token_ref": "keychain:roscoe-account-primary"
+    },
+    {
+      "name": "api-fallback",
+      "kind": "anthropic-api-key",
+      "token_ref": "env:ANTHROPIC_API_KEY",
+      "enabled": false
+    }
   ],
-
   "providers": {
     "anthropic": {
       "protocol": "anthropic",
@@ -19,31 +26,65 @@
       "protocol": "anthropic",
       "base_url": "https://api.deepinfra.com/anthropic",
       "auth": "env:DEEP_INFRA_API_KEY",
-      "pricing_per_mtok": { "input": 0.075, "output": 0.25, "cached_input": 0.015 }
+      "pricing_per_mtok": {
+        "input": 0.075,
+        "output": 0.25,
+        "cached_input": 0.015
+      }
     },
     "local": {
       "protocol": "anthropic",
       "base_url": "http://localhost:11434",
       "auth": "static:ollama",
       "count_tokens": "estimate",
-      "serve": { "engine": "ollama", "model": "glm-4.7-flash" }
+      "serve": {
+        "engine": "ollama",
+        "model": "glm-4.7-flash"
+      }
     }
   },
-
   "nodes": [
-    { "name": "local", "ssh": "", "workers": 2, "enabled": true },
-    { "name": "studio-1", "ssh": "studio-1", "workers": 3, "enabled": false }
+    {
+      "name": "local",
+      "ssh": "",
+      "workers": 2,
+      "enabled": true
+    },
+    {
+      "name": "studio-1",
+      "ssh": "studio-1",
+      "workers": 3,
+      "enabled": false
+    }
   ],
-
   "tiers": {
-    "main": { "kind": "interactive-mcp", "provider": "anthropic", "model": "opus", "account": "primary" },
+    "main": {
+      "kind": "interactive-mcp",
+      "provider": "anthropic",
+      "model": "opus",
+      "account": "primary"
+    },
     "middle": {
       "provider": "anthropic",
       "model": "sonnet",
-      "accounts": ["primary"],
+      "accounts": [
+        "primary"
+      ],
       "session": "per-task",
       "permission_mode": "bypassPermissions",
-      "allowed_tools": ["Agent", "Task", "Workflow", "Read", "Edit", "Write", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"],
+      "allowed_tools": [
+        "Agent",
+        "Task",
+        "Workflow",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "Bash",
+        "WebFetch",
+        "WebSearch"
+      ],
       "max_budget_usd_per_task": 8.0,
       "api_timeout_ms": 3000000
     },
@@ -55,31 +96,92 @@
       "max_concurrent": 8,
       "max_depth": 2,
       "agents": {
-        "impl": { "description": "Implements one well-scoped subtask end to end", "tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"] },
-        "scout": { "description": "Fast read-only search, reading, and summarization", "tools": ["Read", "Glob", "Grep"] },
-        "review": { "description": "Reviews a diff for correctness issues", "tools": ["Read", "Glob", "Grep", "Bash"] }
+        "impl": {
+          "description": "Implements one well-scoped subtask end to end",
+          "tools": [
+            "Read",
+            "Edit",
+            "Write",
+            "Bash",
+            "Glob",
+            "Grep"
+          ]
+        },
+        "scout": {
+          "description": "Fast read-only search, reading, and summarization",
+          "tools": [
+            "Read",
+            "Glob",
+            "Grep"
+          ]
+        },
+        "review": {
+          "description": "Reviews a diff for correctness issues",
+          "tools": [
+            "Read",
+            "Glob",
+            "Grep",
+            "Bash"
+          ]
+        }
       }
     }
   },
-
+  "autonomy": {
+    "level": 90
+  },
+  "memory": {
+    "engine": "graphify",
+    "path": "~/.roscoe/graph",
+    "enabled": true
+  },
   "quorum": {
     "enabled": true,
     "voters": [
-      { "provider": "deepinfra", "model": "zai-org/GLM-5.3-Flash" },
-      { "provider": "deepinfra", "model": "zai-org/GLM-5.3-Flash" },
-      { "provider": "anthropic", "model": "sonnet" }
+      {
+        "provider": "deepinfra",
+        "model": "zai-org/GLM-5.3-Flash"
+      },
+      {
+        "provider": "deepinfra",
+        "model": "zai-org/GLM-5.3-Flash"
+      },
+      {
+        "provider": "anthropic",
+        "model": "sonnet"
+      }
     ],
     "decide": "majority",
     "min_confidence": 0.7,
-    "auto_answer": ["clarifying-questions", "permission-prompts", "retry-or-accept"],
-    "always_escalate": ["destructive-actions", "spend-over-usd:20", "external-publishing"],
-    "notify": { "channel": "twilio-sms", "on": ["auto-answer", "escalation", "task-done"] }
+    "auto_answer": [
+      "clarifying-questions",
+      "permission-prompts",
+      "retry-or-accept"
+    ],
+    "always_escalate": [
+      "destructive-actions",
+      "spend-over-usd:20",
+      "external-publishing"
+    ],
+    "notify": {
+      "channel": "twilio-sms",
+      "on": [
+        "auto-answer",
+        "escalation",
+        "task-done"
+      ]
+    }
   },
-
-  "router": { "bind": "127.0.0.1", "port": 8484, "default_route": "middle" },
-
-  "limits": { "max_parallel_tasks": 4, "per_account_max_concurrent": 2, "run_budget_usd": 50 },
-
+  "router": {
+    "bind": "127.0.0.1",
+    "port": 8484,
+    "default_route": "middle"
+  },
+  "limits": {
+    "max_parallel_tasks": 4,
+    "per_account_max_concurrent": 2,
+    "run_budget_usd": 50
+  },
   "reporting": {
     "ledger": "~/.roscoe/runs/{run_id}/events.jsonl",
     "artifacts": "git-branch-per-task",

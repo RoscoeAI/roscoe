@@ -1,15 +1,27 @@
 # Roscoe
 
-**One binary that runs your Claude Code fleet.**
+**Automate your agent fleet in one Go binary.**
 
-Roscoe orchestrates N real Claude Code sessions in three tiers: your interactive
-session delegates to headless Claude Code workers, which fan out to swarms of
-subagents running on cheap open models, by default
+You hold one interactive session, Claude Code or Codex, either harness. Roscoe
+dispatches the rest in three tiers: headless workers, each fanning out to swarms
+of subagents on cheap open models, by default
 [`zai-org/GLM-5.3-Flash`](https://deepinfra.com/zai-org/GLM-5.3-Flash) via
 DeepInfra's Anthropic-compatible API. One JSON config decides where every tier's
 model comes from (`deepinfra` | `local` | `anthropic`), which machines run
-workers, and how many. When a run needs a human decision, a model quorum answers
-the routine ones. The rare real one reaches you by SMS, and you reply by text.
+workers, and how many.
+
+Two principles run through everything:
+
+- **A dial for autonomy.** `autonomy.level` goes 0 to 100. At 100 Roscoe never
+  interrupts you: the model quorum answers every question, each decision lands
+  in the ledger, and the fleet runs until the credits run out. Below 100, the
+  rare decision that clears your threshold reaches you by SMS and you settle it
+  by replying to a text.
+- **Memory that compounds.** Roscoe is opinionated about memory: it leans on
+  [Graphify](https://github.com/Graphify-Labs/graphify), with the knowledge
+  graph living at `~/.roscoe/graph` next to the rest of the fleet state. Runs,
+  quorum decisions, and outcomes feed the graph, so the fleet learns your
+  codebase and its own mistakes as it goes.
 
 ```
 curl -fsSL https://roscoe.sh/install | sh
@@ -65,11 +77,12 @@ laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 ## Status
 
 Early and moving fast. Working today: `init`, `config`, `router`, `smoke`,
-`run` (single-node), `notify`, `upgrade` + `relay` (hosted SMS), `version`.
-In flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
-(`accounts`), MCP dispatch into your interactive session, the quorum, and a
-`roscoe top` TUI. Pure Go; a single dependency (`coder/websocket`, for the
-relay bridge).
+`run` (single-node, Claude Code), `notify`, `upgrade` + `relay` (hosted SMS),
+`version`. In flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the
+account vault (`accounts`), the quorum with the autonomy dial enforced,
+Graphify-backed memory, Codex workers, MCP dispatch into your interactive
+session, and a `roscoe top` TUI. Pure Go; a single dependency
+(`coder/websocket`, for the relay bridge).
 
 ## Requirements
 

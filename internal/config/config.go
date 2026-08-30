@@ -85,6 +85,8 @@ func Default() *Config {
 				},
 			},
 		},
+		Autonomy: Autonomy{Level: 90},
+		Memory:   Memory{Engine: "graphify", Path: "~/.roscoe/graph", Enabled: true},
 		Quorum: Quorum{
 			Enabled: true,
 			Voters: []Voter{
@@ -175,6 +177,10 @@ func (c *Config) Save(path string) error {
 // returns all problems found, nil when the config is valid.
 func (c *Config) Validate() []error {
 	var errs []error
+
+	if c.Autonomy.Level < 0 || c.Autonomy.Level > 100 {
+		errs = append(errs, fmt.Errorf("autonomy.level must be 0-100, got %d", c.Autonomy.Level))
+	}
 
 	accounts := make(map[string]bool, len(c.Accounts))
 	for _, a := range c.Accounts {

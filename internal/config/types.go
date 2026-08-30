@@ -13,10 +13,31 @@ type Config struct {
 	Providers map[string]Provider `json:"providers"`
 	Nodes     []Node              `json:"nodes"`
 	Tiers     Tiers               `json:"tiers"`
+	Autonomy  Autonomy            `json:"autonomy"`
+	Memory    Memory              `json:"memory"`
 	Quorum    Quorum              `json:"quorum"`
 	Router    RouterCfg           `json:"router"`
 	Limits    Limits              `json:"limits"`
 	Reporting Reporting           `json:"reporting"`
+}
+
+// Autonomy is the fleet's escalation dial, 0-100. It governs how much the
+// quorum absorbs before a human is interrupted: at 100 Roscoe never texts
+// you at all — the quorum answers every question, each decision lands in
+// the ledger and memory, and the only remaining escalation is exhausted
+// credits/budget. Lower levels widen the always-escalate surface.
+type Autonomy struct {
+	Level int `json:"level"`
+}
+
+// Memory: Roscoe is opinionated — Graphify
+// (github.com/Graphify-Labs/graphify) is the fleet's memory. Runs,
+// quorum decisions, and outcomes feed a knowledge graph that lives with
+// the rest of the fleet state under ~/.roscoe.
+type Memory struct {
+	Engine  string `json:"engine"` // "graphify"
+	Path    string `json:"path"`   // "~/.roscoe/graph"
+	Enabled bool   `json:"enabled"`
 }
 
 // Account is one Claude credential. Kind: "claude-subscription" (setup-token
