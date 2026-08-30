@@ -42,7 +42,13 @@ type Notifier interface {
 func New(cfg config.NotifyCfg, env map[string]string) (Notifier, error) {
 	switch cfg.Channel {
 	case "twilio-sms":
-		return newTwilio(cfg, env)
+		// Explicit nil on error: returning newTwilio's (*twilio)(nil) directly
+		// would produce a non-nil interface wrapping a nil pointer.
+		tw, err := newTwilio(cfg, env)
+		if err != nil {
+			return nil, err
+		}
+		return tw, nil
 	case "roscoe-relay":
 		return nil, fmt.Errorf("notify: channel %q is built via the relay package (run \"roscoe upgrade\" to link it)", cfg.Channel)
 	default:
