@@ -555,11 +555,11 @@ func buildNotifier(cfg *config.Config, env map[string]string) (notify.Notifier, 
 // notify channel flipped to roscoe-relay.
 func cmdUpgrade(ctx context.Context, explicit string, args []string) int {
 	fl := flag.NewFlagSet("upgrade", flag.ExitOnError)
-	phone := fl.String("phone", "", "your mobile in E.164 form, e.g. +15551234567")
+	phone := fl.String("phone", "", "your mobile number with the country code first, like +15551234567")
 	baseURL := fl.String("base-url", relay.DefaultBaseURL, "relay control plane")
 	_ = fl.Parse(args)
 	if *phone == "" {
-		fmt.Fprintln(os.Stderr, "roscoe upgrade: --phone is required (E.164, e.g. --phone +15551234567) — it's the number your escalation texts go to")
+		fmt.Fprintln(os.Stderr, "roscoe upgrade: --phone is required, country code first, like --phone +15551234567. It is the number your escalation texts go to.")
 		return 2
 	}
 
