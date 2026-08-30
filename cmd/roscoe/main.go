@@ -90,6 +90,7 @@ commands:
   smoke [--full]                          run the environment smoke checks
   run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]
                                           run one task through a local worker;
+                                          esc interrupts + lets you type a redirect;
                                           --resume migrates + continues an existing claude session
   notify test [msg] | notify serve        exercise the escalation channel
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"roscoe.sh/roscoe/internal/config"
@@ -311,10 +312,72 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 
-	res, err := worker.Run(ctx,
-		worker.Task{ID: *taskID, Prompt: prompt, Dir: *dir, Account: account, Token: token, Resume: *resume, ResumeFrom: resumeFrom},
-		worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: narrate},
-	)
+	// Esc interrupts the running task at a clean point; typing a line then
+	// resumes the same session with the new instruction.
+	var keys *keyReader
+	if isTTY(os.Stdin) {
+		if k, restoreTTY, kerr := newKeyReader(); kerr == nil {
+			keys = k
+			defer restoreTTY()
+			fmt.Fprintln(os.Stderr, "[keys] esc interrupts the task; you can then type a redirect")
+		}
+	}
+
+	runPrompt, runResume, runResumeFrom := prompt, *resume, resumeFrom
+	var lastSession string
+	onEvent := func(ev *streamjson.Event) {
+		if ie, ok := ev.AsInit(); ok && ie.SessionID != "" {
+			lastSession = ie.SessionID
+		}
+		narrate(ev)
+	}
+
+	var res *streamjson.ResultEvent
+	var runErr error
+	for {
+		taskCtx, cancelTask := context.WithCancel(ctx)
+		var escPressed atomic.Bool
+		if keys != nil {
+			go func() {
+				if keys.WaitEsc(taskCtx) {
+					escPressed.Store(true)
+					fmt.Fprintln(os.Stderr, "\n[esc] interrupting; the worker stops at a clean point…")
+					cancelTask()
+				}
+			}()
+		}
+
+		res, runErr = worker.Run(taskCtx,
+			worker.Task{ID: *taskID, Prompt: runPrompt, Dir: *dir, Account: account, Token: token, Resume: runResume, ResumeFrom: runResumeFrom},
+			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: onEvent},
+		)
+		cancelTask()
+
+		if escPressed.Load() && ctx.Err() == nil {
+			if res != nil && res.SessionID != "" {
+				lastSession = res.SessionID
+			}
+			if cfg.Tiers.Middle.Harness == "codex" {
+				fmt.Fprintln(os.Stderr, "[esc] stopped. The codex harness can't resume a session yet.")
+				return 130
+			}
+			if lastSession == "" {
+				fmt.Fprintln(os.Stderr, "[esc] stopped before the session started; nothing to resume.")
+				return 130
+			}
+			line, ok := keys.ReadLine("redirect> ")
+			if !ok || strings.TrimSpace(line) == "" {
+				fmt.Fprintf(os.Stderr, "[esc] stopped. Pick it back up any time: roscoe run --resume %s \"...\"\n", lastSession)
+				return 130
+			}
+			runPrompt = strings.TrimSpace(line)
+			runResume = lastSession
+			runResumeFrom = "" // the transcript already lives in this task's config dir
+			fmt.Fprintf(os.Stderr, "[redirect] resuming session %s\n", lastSession)
+			continue
+		}
+		break
+	}
 
 	// Stop the router before reporting so nothing interleaves with the output.
 	rcancel()
@@ -323,8 +386,8 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	case <-time.After(2 * time.Second):
 	}
 
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "roscoe run: %v\n", err)
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "roscoe run: %v\n", runErr)
 		return 1
 	}
 	if res == nil { // contract says non-nil on success; guard anyway
