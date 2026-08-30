@@ -121,13 +121,13 @@ type Voter struct {
 	Account  string `json:"account,omitempty"`
 }
 
-// NotifyCfg: Channel "twilio-sms" (primary) or "ntfy". Twilio reads
-// TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM / TWILIO_TO from the
-// env file; ntfy uses Server+Topic.
+// NotifyCfg: Channel "twilio-sms" (bring-your-own number; reads
+// TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_MESSAGING_SERVICE_SID or
+// TWILIO_FROM / TWILIO_TO from the env file) or "roscoe-relay" (hosted
+// shared number; linked via `roscoe upgrade`, credentials in
+// ~/.roscoe/relay.json).
 type NotifyCfg struct {
 	Channel string   `json:"channel"`
-	Server  string   `json:"server,omitempty"`
-	Topic   string   `json:"topic,omitempty"`
 	On      []string `json:"on"`
 }
 

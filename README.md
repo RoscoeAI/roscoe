@@ -46,13 +46,27 @@ precedence is flag > `ROSCOE_*` env > `roscoe.json` > defaults. See
 [`roscoe.example.json`](roscoe.example.json) for the full shape and
 [`SPEC.md`](SPEC.md) for the package contracts.
 
+## Text-message escalations
+
+Escalations are SMS — reply by text, from any phone, no app. Two ways:
+
+- **Bring your own Twilio**: set `TWILIO_*` in `~/.roscoe/.env`
+  (`quorum.notify.channel: "twilio-sms"`); `roscoe notify serve` receives
+  replies on your webhook.
+- **Hosted relay, $5/month**: `roscoe upgrade --phone +1…` links this
+  machine to Roscoe's shared number — browser sign-in, consent, checkout —
+  then replies arrive over an outbound WebSocket (no webhook, no tunnel;
+  offline messages queue server-side). `roscoe relay status` / `roscoe
+  relay listen` to inspect.
+
 ## Status
 
 Early and moving fast. Working today: `init`, `config`, `router`, `smoke`,
-`run` (single-node), `notify` (Twilio SMS + ntfy), `version`. In flight:
-multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
+`run` (single-node), `notify`, `upgrade` + `relay` (hosted SMS), `version`.
+In flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
 (`accounts`), MCP dispatch into your interactive session, the quorum, and a
-`roscoe top` TUI. Built pure-Go, stdlib only, zero runtime dependencies.
+`roscoe top` TUI. Pure Go; a single dependency (`coder/websocket`, for the
+relay bridge).
 
 ## Requirements
 

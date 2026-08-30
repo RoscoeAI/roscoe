@@ -97,8 +97,7 @@ func Default() *Config {
 			AutoAnswer:     []string{"clarifying-questions", "permission-prompts", "retry-or-accept"},
 			AlwaysEscalate: []string{"destructive-actions", "spend-over-usd:20", "external-publishing"},
 			Notify: NotifyCfg{
-				Channel: "ntfy",
-				Topic:   "roscoe-fleet",
+				Channel: "twilio-sms",
 				On:      []string{"auto-answer", "escalation", "task-done"},
 			},
 		},

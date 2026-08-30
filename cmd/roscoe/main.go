@@ -56,6 +56,10 @@ func realMain() int {
 		return cmdRun(ctx, *cfgPath, rest)
 	case "notify":
 		return cmdNotify(ctx, *cfgPath, rest)
+	case "upgrade":
+		return cmdUpgrade(ctx, *cfgPath, rest)
+	case "relay":
+		return cmdRelay(ctx, *cfgPath, rest)
 	case "up", "node", "accounts", "deploy", "dispatch", "status", "top":
 		return cmdStub(cmd)
 	default:

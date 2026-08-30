@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/notify"
+	"roscoe.sh/roscoe/internal/relay"
 	"roscoe.sh/roscoe/internal/router"
 	"roscoe.sh/roscoe/internal/smoke"
 	"roscoe.sh/roscoe/internal/streamjson"
@@ -477,7 +479,7 @@ func cmdNotify(ctx context.Context, explicit string, args []string) int {
 		fmt.Fprintf(os.Stderr, "roscoe notify: %v\n", err)
 		return 1
 	}
-	n, err := notify.New(cfg.Quorum.Notify, env)
+	n, err := buildNotifier(cfg, env)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "roscoe notify: %v\n", err)
 		return 1
@@ -520,6 +522,155 @@ func cmdNotify(ctx context.Context, explicit string, args []string) int {
 		return 0
 	}
 	return 2
+}
+
+// buildNotifier constructs the configured channel; "roscoe-relay" lives in
+// the relay package to keep notify's imports one-directional.
+func buildNotifier(cfg *config.Config, env map[string]string) (notify.Notifier, error) {
+	if cfg.Quorum.Notify.Channel == "roscoe-relay" {
+		return relay.NewNotifier()
+	}
+	return notify.New(cfg.Quorum.Notify, env)
+}
+
+// cmdUpgrade links this machine to the hosted relay ($5/mo shared SMS
+// number): device flow in the browser, tokens to ~/.roscoe/relay.json,
+// notify channel flipped to roscoe-relay.
+func cmdUpgrade(ctx context.Context, explicit string, args []string) int {
+	fl := flag.NewFlagSet("upgrade", flag.ExitOnError)
+	phone := fl.String("phone", "", "your mobile in E.164 form, e.g. +15551234567")
+	baseURL := fl.String("base-url", relay.DefaultBaseURL, "relay control plane")
+	_ = fl.Parse(args)
+	if *phone == "" {
+		fmt.Fprintln(os.Stderr, "roscoe upgrade: --phone is required (E.164, e.g. --phone +15551234567) — it's the number your escalation texts go to")
+		return 2
+	}
+
+	// Already linked and refreshable → nothing to do.
+	if creds, err := relay.LoadCreds(); err == nil {
+		if err := creds.EnsureFresh(ctx); err == nil {
+			fmt.Fprintf(os.Stderr, "roscoe upgrade: already linked (client %s…, phone %s). Use \"roscoe relay status\" to inspect.\n", creds.ClientID[:8], creds.Phone)
+			return 0
+		}
+	}
+
+	clientID := relay.NewClientID()
+	start, err := relay.StartLink(ctx, *baseURL, clientID, *phone)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe upgrade: %v\n", err)
+		return 1
+	}
+
+	link := start.VerificationURLComplete
+	if link == "" {
+		link = start.VerificationURL
+	}
+	copied := copyToClipboard(link)
+	fmt.Fprintf(os.Stderr, "\n  Finish linking in your browser:\n\n    %s\n\n", link)
+	if copied {
+		fmt.Fprintln(os.Stderr, "  The link is in your clipboard too — paste it into any browser")
+		fmt.Fprintln(os.Stderr, "  signed into the account you want to use.")
+	}
+	fmt.Fprintln(os.Stderr, "  (sign in, confirm SMS consent, and complete the $5/mo checkout if prompted)")
+	openBrowser(link)
+	fmt.Fprintln(os.Stderr, "\n  Waiting for approval…")
+
+	creds, err := relay.PollLink(ctx, *baseURL, clientID, start.DeviceCode, *phone, start.PollIntervalSeconds, func() { fmt.Fprint(os.Stderr, ".") })
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe upgrade: %v\n", err)
+		return 1
+	}
+	if err := creds.Save(); err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe upgrade: %v\n", err)
+		return 1
+	}
+
+	// Flip the notify channel in config.
+	cfg, _, cfgPath, err := loadConfigAndEnv(explicit)
+	if err == nil && cfg.Quorum.Notify.Channel != "roscoe-relay" {
+		cfg.Quorum.Notify.Channel = "roscoe-relay"
+		if err := cfg.Save(cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "roscoe upgrade: linked, but could not update %s: %v\n", cfgPath, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  quorum.notify.channel → roscoe-relay (%s)\n", cfgPath)
+		}
+	}
+
+	if bs, err := relay.GetBillingStatus(ctx, *baseURL, creds.Phone, creds.ClientID); err == nil {
+		fmt.Fprintf(os.Stderr, "  Linked. phone=%s subscription=%s active=%v\n", bs.Phone, bs.SubscriptionStatus, bs.Active)
+		if !bs.Active {
+			fmt.Fprintf(os.Stderr, "  Subscription not active yet — finish checkout at %s/link\n", *baseURL)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "  Linked.")
+	}
+	fmt.Fprintln(os.Stderr, "  Test it: roscoe notify test   ·   watch replies: roscoe relay listen")
+	return 0
+}
+
+// cmdRelay: status | listen.
+func cmdRelay(ctx context.Context, _ string, args []string) int {
+	if len(args) == 0 || (args[0] != "status" && args[0] != "listen") {
+		fmt.Fprintln(os.Stderr, "usage: roscoe relay status | roscoe relay listen")
+		return 2
+	}
+	creds, err := relay.LoadCreds()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe relay: %v\n", err)
+		return 1
+	}
+	switch args[0] {
+	case "status":
+		mask := func(s string) string {
+			if len(s) <= 4 {
+				return "…"
+			}
+			return "…" + s[len(s)-4:]
+		}
+		fmt.Printf("client:  %s\nphone:   %s\nserver:  %s\naccess:  %s (expires %s)\nrefresh: %s (expires %s)\n",
+			creds.ClientID, creds.Phone, creds.BaseURL,
+			mask(creds.AccessToken), creds.AccessTokenExpiresAt.Format(time.RFC3339),
+			mask(creds.RefreshToken), creds.RefreshTokenExpiresAt.Format(time.RFC3339))
+		if bs, err := relay.GetBillingStatus(ctx, creds.BaseURL, creds.Phone, creds.ClientID); err == nil {
+			fmt.Printf("billing: subscription=%s active=%v round-trip-verified=%v\n", bs.SubscriptionStatus, bs.Active, bs.RoundTripVerified)
+		} else {
+			fmt.Printf("billing: %v\n", err)
+		}
+		return 0
+	case "listen":
+		fmt.Fprintln(os.Stderr, "roscoe relay listen: holding the bridge open (SIGINT to stop)")
+		err := creds.Connect(ctx,
+			func(in relay.Inbound) { fmt.Printf("[reply] from=%s at=%s body=%q\n", in.From, in.ReceivedAt, in.Body) },
+			func(s string) { fmt.Fprintf(os.Stderr, "[bridge] %s\n", s) })
+		if err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintf(os.Stderr, "roscoe relay listen: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	return 2
+}
+
+func copyToClipboard(s string) bool {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	default:
+		cmd = exec.Command("xclip", "-selection", "clipboard")
+	}
+	cmd.Stdin = strings.NewReader(s)
+	return cmd.Run() == nil
+}
+
+func openBrowser(u string) {
+	switch runtime.GOOS {
+	case "darwin":
+		_ = exec.Command("open", u).Start()
+	default:
+		_ = exec.Command("xdg-open", u).Start()
+	}
 }
 
 func cmdStub(name string) int {

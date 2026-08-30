@@ -14,13 +14,11 @@ import (
 	"roscoe.sh/roscoe/internal/config"
 )
 
-// Message is one outbound notification. Priority follows ntfy semantics
-// (1 min .. 5 max, 0 = channel default); channels without a priority
-// concept ignore it.
+// Message is one outbound notification.
 type Message struct {
 	Title    string
 	Body     string
-	Priority int
+	Priority int // reserved; SMS channels ignore it
 }
 
 // Reply is one inbound human reply.
@@ -36,16 +34,19 @@ type Notifier interface {
 	InboundHandler(onReply func(Reply)) http.Handler
 }
 
-// New builds the Notifier for cfg.Channel: "twilio-sms" or "ntfy".
+// New builds the Notifier for cfg.Channel. It handles "twilio-sms"
+// (bring-your-own number); the "roscoe-relay" hosted channel is
+// constructed by the caller from the relay package (which implements
+// this package's Notifier interface) to keep imports one-directional.
 // Credentials come from env (the loaded env file), never from cfg.
 func New(cfg config.NotifyCfg, env map[string]string) (Notifier, error) {
 	switch cfg.Channel {
 	case "twilio-sms":
 		return newTwilio(cfg, env)
-	case "ntfy":
-		return newNtfy(cfg, env)
+	case "roscoe-relay":
+		return nil, fmt.Errorf("notify: channel %q is built via the relay package (run \"roscoe upgrade\" to link it)", cfg.Channel)
 	default:
-		return nil, fmt.Errorf("notify: unknown channel %q (want \"twilio-sms\" or \"ntfy\")", cfg.Channel)
+		return nil, fmt.Errorf("notify: unknown channel %q (want \"twilio-sms\" or \"roscoe-relay\")", cfg.Channel)
 	}
 }
 
