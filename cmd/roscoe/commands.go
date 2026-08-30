@@ -559,9 +559,14 @@ func cmdUpgrade(ctx context.Context, explicit string, args []string) int {
 	baseURL := fl.String("base-url", relay.DefaultBaseURL, "relay control plane")
 	_ = fl.Parse(args)
 	if *phone == "" {
-		fmt.Fprintln(os.Stderr, "roscoe upgrade: --phone is required, country code first, like --phone +15551234567. It is the number your escalation texts go to.")
+		fmt.Fprintln(os.Stderr, "roscoe upgrade: --phone is required, like --phone +15551234567. It is the number your escalation texts go to.")
 		return 2
 	}
+	normalized := normalizePhone(*phone)
+	if normalized != *phone {
+		fmt.Fprintf(os.Stderr, "roscoe upgrade: using %s\n", normalized)
+	}
+	*phone = normalized
 
 	// Already linked and refreshable → nothing to do.
 	if creds, err := relay.LoadCreds(); err == nil {
@@ -627,6 +632,31 @@ func cmdUpgrade(ctx context.Context, explicit string, args []string) int {
 }
 
 // cmdRelay: status | listen.
+// normalizePhone accepts however a human types their number: strips
+// punctuation, assumes US (+1) for bare 10-digit numbers, adds the
+// missing + otherwise.
+func normalizePhone(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	var digits strings.Builder
+	for _, r := range trimmed {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	d := digits.String()
+	switch {
+	case strings.HasPrefix(trimmed, "+"):
+		return "+" + d
+	case len(d) == 10:
+		return "+1" + d
+	case len(d) == 11 && strings.HasPrefix(d, "1"):
+		return "+" + d
+	case d != "":
+		return "+" + d
+	}
+	return ""
+}
+
 func cmdRelay(ctx context.Context, _ string, args []string) int {
 	if len(args) == 0 || (args[0] != "status" && args[0] != "listen") {
 		fmt.Fprintln(os.Stderr, "usage: roscoe relay status | roscoe relay listen")
