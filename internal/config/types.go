@@ -96,6 +96,11 @@ type MainTier struct {
 }
 
 type MiddleTier struct {
+	// Harness picks the worker CLI: "claude" (default; full tier-3 subagent
+	// swarms via the router) or "codex" (single-agent workers via
+	// `codex exec`; codex owns its own auth/model config, and tier-3
+	// swarms/resume don't apply).
+	Harness             string   `json:"harness,omitempty"`
 	Provider            string   `json:"provider"`
 	Model               string   `json:"model"`
 	Accounts            []string `json:"accounts"`

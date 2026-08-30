@@ -77,12 +77,14 @@ laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 ## Status
 
 Early and moving fast. Working today: `init`, `config`, `router`, `smoke`,
-`run` (single-node, Claude Code), `notify`, `upgrade` + `relay` (hosted SMS),
-`version`. In flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the
-account vault (`accounts`), the quorum with the autonomy dial enforced,
-Graphify-backed memory, Codex workers, MCP dispatch into your interactive
-session, and a `roscoe top` TUI. Pure Go; a single dependency
-(`coder/websocket`, for the relay bridge).
+`run` (single-node; Claude Code workers with full subagent swarms, or Codex
+workers via `--harness codex` / `tiers.middle.harness`), `notify`,
+`upgrade` + `relay` (hosted SMS), `version`. Codex workers are single-agent
+for now: the tier-3 swarm and `--resume` are Claude Code features. In
+flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
+(`accounts`), the quorum with the autonomy dial enforced, Graphify-backed
+memory, MCP dispatch into your interactive session, and a `roscoe top` TUI.
+Pure Go; a single dependency (`coder/websocket`, for the relay bridge).
 
 ## Requirements
 

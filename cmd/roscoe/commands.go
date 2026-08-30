@@ -228,6 +228,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	dir := fl.String("dir", "", "working directory for the task (default: current directory)")
 	resume := fl.String("resume", "", "continue an existing claude session by id (migrates the transcript into the fleet)")
 	fromConfig := fl.String("from-config-dir", "", "CLAUDE_CONFIG_DIR to migrate --resume's session from (default: ~/.claude)")
+	harness := fl.String("harness", "", `worker harness: "claude" (default) or "codex" (overrides tiers.middle.harness)`)
 	_ = fl.Parse(args)
 	rest := fl.Args()
 	if len(rest) == 0 {
@@ -258,6 +259,9 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "roscoe run: %v\n", err)
 		return 1
+	}
+	if *harness != "" {
+		cfg.Tiers.Middle.Harness = *harness
 	}
 
 	if *taskID == "" {

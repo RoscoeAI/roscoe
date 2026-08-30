@@ -44,6 +44,7 @@ type Opts struct {
 	Cfg        *config.Config
 	RouterAddr string         // "127.0.0.1:8484"
 	ClaudeBin  string         // "" → "claude" from PATH
+	CodexBin   string         // "" → "codex" from PATH (harness "codex")
 	Ledger     *ledger.Ledger // may be nil
 	OnEvent    func(*streamjson.Event)
 }
@@ -99,55 +100,93 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 	mid := o.Cfg.Tiers.Middle
 	sub := o.Cfg.Tiers.Subagents
 
-	bin := o.ClaudeBin
-	if bin == "" {
-		bin = "claude"
-	}
-	args := []string{
-		"-p", t.Prompt,
-		"--output-format", "stream-json",
-		"--verbose",
-		"--forward-subagent-text",
-		"--permission-mode", mid.PermissionMode,
-		"--allowedTools", strings.Join(mid.AllowedTools, ","),
-		"--agents", agentsJSON,
-		"--max-budget-usd", strconv.FormatFloat(mid.MaxBudgetUSDPerTask, 'f', -1, 64),
-		"--model", mid.Model,
-	}
-	if t.Resume != "" {
-		args = append(args, "--resume", t.Resume)
-	} else {
-		args = append(args, "--session-id", sessionID)
+	harness := mid.Harness
+	if harness == "" {
+		harness = "claude"
 	}
 
-	env := append(os.Environ(),
-		"CLAUDE_CONFIG_DIR="+ccfgDir,
-		"ANTHROPIC_BASE_URL=http://"+o.RouterAddr,
+	var (
+		bin          string
+		args         []string
+		env          []string
+		codexLastMsg string
 	)
-	if t.Token != "" {
-		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+t.Token)
-	} else {
-		// No account token: a fresh CLAUDE_CONFIG_DIR has no credentials and
-		// claude refuses to run ("Not logged in"). A dummy gateway bearer
-		// satisfies auth against the loopback router; it only works end-to-end
-		// when no route needs "account" (header-passthrough) auth — i.e.
-		// all-tier3/all-env-auth configs.
-		env = append(env, "ANTHROPIC_AUTH_TOKEN=roscoe-local")
-	}
-	env = append(env, "CLAUDE_CODE_SUBAGENT_MODEL="+sub.VirtualModel)
-	if sub.MapHaikuAlias {
-		env = append(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL="+sub.VirtualModel)
-	}
-	// Zero values are skipped rather than exported: API_TIMEOUT_MS=0 would
-	// mean an instant timeout, not "unset".
-	if mid.APITimeoutMS > 0 {
-		env = append(env, "API_TIMEOUT_MS="+strconv.Itoa(mid.APITimeoutMS))
-	}
-	if sub.MaxConcurrent > 0 {
-		env = append(env, "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="+strconv.Itoa(sub.MaxConcurrent))
-	}
-	if sub.MaxDepth > 0 {
-		env = append(env, "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH="+strconv.Itoa(sub.MaxDepth))
+	switch harness {
+	case "codex":
+		// Single-agent worker via `codex exec`. Codex owns its auth and model
+		// config; the router, virtual-model routing, and subagent swarms are
+		// claude-harness features and don't apply here.
+		if t.Resume != "" {
+			return nil, fmt.Errorf("worker: task %s: --resume is not supported for the codex harness yet", t.ID)
+		}
+		bin = o.CodexBin
+		if bin == "" {
+			bin = "codex"
+		}
+		codexLastMsg = filepath.Join(filepath.Dir(ccfgDir), "last-message.txt")
+		args = []string{"exec", "--json", "--skip-git-repo-check", "-o", codexLastMsg}
+		if t.Dir != "" {
+			args = append(args, "-C", t.Dir)
+		}
+		if mid.PermissionMode == "bypassPermissions" {
+			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		} else {
+			args = append(args, "-s", "workspace-write", "--approve-for-me")
+		}
+		args = append(args, t.Prompt)
+		env = os.Environ()
+
+	default: // claude
+		bin = o.ClaudeBin
+		if bin == "" {
+			bin = "claude"
+		}
+		args = []string{
+			"-p", t.Prompt,
+			"--output-format", "stream-json",
+			"--verbose",
+			"--forward-subagent-text",
+			"--permission-mode", mid.PermissionMode,
+			"--allowedTools", strings.Join(mid.AllowedTools, ","),
+			"--agents", agentsJSON,
+			"--max-budget-usd", strconv.FormatFloat(mid.MaxBudgetUSDPerTask, 'f', -1, 64),
+			"--model", mid.Model,
+		}
+		if t.Resume != "" {
+			args = append(args, "--resume", t.Resume)
+		} else {
+			args = append(args, "--session-id", sessionID)
+		}
+
+		env = append(os.Environ(),
+			"CLAUDE_CONFIG_DIR="+ccfgDir,
+			"ANTHROPIC_BASE_URL=http://"+o.RouterAddr,
+		)
+		if t.Token != "" {
+			env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+t.Token)
+		} else {
+			// No account token: a fresh CLAUDE_CONFIG_DIR has no credentials and
+			// claude refuses to run ("Not logged in"). A dummy gateway bearer
+			// satisfies auth against the loopback router; it only works end-to-end
+			// when no route needs "account" (header-passthrough) auth — i.e.
+			// all-tier3/all-env-auth configs.
+			env = append(env, "ANTHROPIC_AUTH_TOKEN=roscoe-local")
+		}
+		env = append(env, "CLAUDE_CODE_SUBAGENT_MODEL="+sub.VirtualModel)
+		if sub.MapHaikuAlias {
+			env = append(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL="+sub.VirtualModel)
+		}
+		// Zero values are skipped rather than exported: API_TIMEOUT_MS=0 would
+		// mean an instant timeout, not "unset".
+		if mid.APITimeoutMS > 0 {
+			env = append(env, "API_TIMEOUT_MS="+strconv.Itoa(mid.APITimeoutMS))
+		}
+		if sub.MaxConcurrent > 0 {
+			env = append(env, "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="+strconv.Itoa(sub.MaxConcurrent))
+		}
+		if sub.MaxDepth > 0 {
+			env = append(env, "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH="+strconv.Itoa(sub.MaxDepth))
+		}
 	}
 
 	// Not CommandContext: cancellation runs the SIGINT → grace → SIGKILL
@@ -219,6 +258,15 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 	if scanErr != nil {
 		return nil, fmt.Errorf("worker: task %s: reading stream-json: %w", t.ID, scanErr)
 	}
+	// Codex emits its own JSONL (ledgered above as generic events) and never
+	// a claude result event; the final message lands in the -o file.
+	if result == nil && codexLastMsg != "" {
+		if b, err := os.ReadFile(codexLastMsg); err == nil {
+			if msg := strings.TrimSpace(string(b)); msg != "" {
+				result = &streamjson.ResultEvent{Result: msg, IsError: waitErr != nil}
+			}
+		}
+	}
 	if result != nil {
 		return result, nil
 	}
@@ -226,11 +274,11 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 		return nil, fmt.Errorf("worker: task %s interrupted before result: %w", t.ID, err)
 	}
 	if waitErr != nil {
-		return nil, fmt.Errorf("worker: task %s: claude failed without result (stderr: %s): %w",
-			t.ID, stderrTail(stderr.Bytes()), waitErr)
+		return nil, fmt.Errorf("worker: task %s: %s failed without result (stderr: %s): %w",
+			t.ID, harness, stderrTail(stderr.Bytes()), waitErr)
 	}
-	return nil, fmt.Errorf("worker: task %s: claude exited 0 without a result event (stderr: %s)",
-		t.ID, stderrTail(stderr.Bytes()))
+	return nil, fmt.Errorf("worker: task %s: %s exited 0 without a result event (stderr: %s)",
+		t.ID, harness, stderrTail(stderr.Bytes()))
 }
 
 // stderrTail keeps error messages bounded; claude can be chatty on stderr.
