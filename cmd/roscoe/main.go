@@ -30,6 +30,14 @@ func realMain() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Accept --version/-v before flag parsing so the conventional spelling
+	// works alongside the "version" subcommand.
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-version" || a == "-v" {
+			return cmdVersion()
+		}
+	}
+
 	flag.Usage = usage
 	cfgPath := flag.String("config", "", "path to roscoe.json (default ./roscoe.json, fallback ~/.roscoe/roscoe.json)")
 	flag.Parse()
@@ -81,6 +89,9 @@ commands:
   router [--bind B] [--port N]            run the model router in the foreground
   smoke [--full]                          run the environment smoke checks
   run "<prompt>" [--task-id X] [--dir D]  run one task through a local worker
+  notify test [msg] | notify serve        exercise the escalation channel
+  upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
+  relay status | relay listen             inspect the relay link / tail replies
   version                                 print the roscoe version
   up | node | accounts | deploy | dispatch | status | top
                                           coming in slice 2 (see ARCHITECTURE.md)
