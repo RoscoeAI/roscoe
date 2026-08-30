@@ -226,13 +226,26 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	fl := flag.NewFlagSet("run", flag.ExitOnError)
 	taskID := fl.String("task-id", "", "task id (default: generated)")
 	dir := fl.String("dir", "", "working directory for the task (default: current directory)")
+	resume := fl.String("resume", "", "continue an existing claude session by id (migrates the transcript into the fleet)")
+	fromConfig := fl.String("from-config-dir", "", "CLAUDE_CONFIG_DIR to migrate --resume's session from (default: ~/.claude)")
 	_ = fl.Parse(args)
 	rest := fl.Args()
 	if len(rest) == 0 {
-		fmt.Fprintln(os.Stderr, `usage: roscoe run "<prompt>" [--task-id X] [--dir D]`)
+		fmt.Fprintln(os.Stderr, `usage: roscoe run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]`)
 		return 2
 	}
 	prompt := rest[0]
+
+	resumeFrom := ""
+	if *resume != "" {
+		src, err := worker.FindSession(*fromConfig, *resume)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "roscoe run: %v\n", err)
+			return 1
+		}
+		resumeFrom = src
+		fmt.Fprintf(os.Stderr, "[migrate] importing session %s from %s\n", *resume, src)
+	}
 	if len(rest) > 1 { // accept flags after the prompt too, per the synopsis
 		_ = fl.Parse(rest[1:])
 		if fl.NArg() > 0 {
@@ -295,7 +308,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 
 	res, err := worker.Run(ctx,
-		worker.Task{ID: *taskID, Prompt: prompt, Dir: *dir, Account: account, Token: token},
+		worker.Task{ID: *taskID, Prompt: prompt, Dir: *dir, Account: account, Token: token, Resume: *resume, ResumeFrom: resumeFrom},
 		worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: narrate},
 	)
 

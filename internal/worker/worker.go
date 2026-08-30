@@ -30,6 +30,13 @@ type Task struct {
 	Dir     string // cwd; created if missing
 	Account string // account name; token resolved by caller
 	Token   string // CLAUDE_CODE_OAUTH_TOKEN value ("" → rely on claude's own auth)
+	// Resume continues an existing claude session by id instead of starting
+	// fresh. When ResumeFrom (a source transcript path, usually from
+	// FindSession) is also set, the transcript is imported into the task's
+	// isolated config dir first — this is how an interactive ~/.claude
+	// session migrates into the fleet.
+	Resume     string
+	ResumeFrom string
 }
 
 // Opts carries the shared wiring a worker run needs.
@@ -60,6 +67,9 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("worker: session id: %w", err)
 	}
+	if t.Resume != "" {
+		sessionID = t.Resume
+	}
 	if t.ID == "" {
 		t.ID = sessionID
 	}
@@ -74,6 +84,11 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 	ccfgDir := filepath.Join(config.ExpandPath(o.Cfg.StateDir), "workers", t.ID, "ccfg")
 	if err := os.MkdirAll(ccfgDir, 0o755); err != nil {
 		return nil, fmt.Errorf("worker: create config dir: %w", err)
+	}
+	if t.Resume != "" && t.ResumeFrom != "" {
+		if err := importSession(t.ResumeFrom, ccfgDir); err != nil {
+			return nil, err
+		}
 	}
 
 	agentsJSON, err := BuildAgentsJSON(o.Cfg)
@@ -96,9 +111,13 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 		"--permission-mode", mid.PermissionMode,
 		"--allowedTools", strings.Join(mid.AllowedTools, ","),
 		"--agents", agentsJSON,
-		"--session-id", sessionID,
 		"--max-budget-usd", strconv.FormatFloat(mid.MaxBudgetUSDPerTask, 'f', -1, 64),
 		"--model", mid.Model,
+	}
+	if t.Resume != "" {
+		args = append(args, "--resume", t.Resume)
+	} else {
+		args = append(args, "--session-id", sessionID)
 	}
 
 	env := append(os.Environ(),

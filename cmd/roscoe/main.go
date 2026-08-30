@@ -88,7 +88,9 @@ commands:
   config set <dotted.path> <value>        change one config value and save
   router [--bind B] [--port N]            run the model router in the foreground
   smoke [--full]                          run the environment smoke checks
-  run "<prompt>" [--task-id X] [--dir D]  run one task through a local worker
+  run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]
+                                          run one task through a local worker;
+                                          --resume migrates + continues an existing claude session
   notify test [msg] | notify serve        exercise the escalation channel
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
   relay status | relay listen             inspect the relay link / tail replies
