@@ -94,7 +94,7 @@ commands:
                                           --resume migrates + continues an existing claude session
   notify test [msg] | notify serve        exercise the escalation channel
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
-  relay status | relay listen             inspect the relay link / tail replies
+  relay status | listen | unlink          inspect the link, tail replies, or clear it
   version                                 print the roscoe version
   up | node | accounts | deploy | dispatch | status | top
                                           coming in slice 2 (see ARCHITECTURE.md)

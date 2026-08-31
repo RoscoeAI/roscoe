@@ -631,12 +631,19 @@ func cmdUpgrade(ctx context.Context, explicit string, args []string) int {
 	}
 	*phone = normalized
 
-	// Already linked and refreshable → nothing to do.
-	if creds, err := relay.LoadCreds(); err == nil {
+	// Already linked → only short-circuit if the SERVER still recognizes the
+	// link. A locally-valid access token proves nothing when the account was
+	// deleted or the subscription was cancelled upstream, so the billing
+	// endpoint (not the token's expiry) is the source of truth. Any doubt
+	// falls through to a fresh link rather than stranding the user.
+	if creds, err := relay.LoadCreds(); err == nil && creds.Phone == *phone {
 		if err := creds.EnsureFresh(ctx); err == nil {
-			fmt.Fprintf(os.Stderr, "roscoe upgrade: already linked (client %s…, phone %s). Use \"roscoe relay status\" to inspect.\n", creds.ClientID[:8], creds.Phone)
-			return 0
+			if _, err := relay.GetBillingStatus(ctx, creds.BaseURL, creds.Phone, creds.ClientID); err == nil {
+				fmt.Fprintf(os.Stderr, "roscoe upgrade: already linked (client %s…, phone %s). Use \"roscoe relay status\" to inspect.\n", creds.ClientID[:8], creds.Phone)
+				return 0
+			}
 		}
+		fmt.Fprintln(os.Stderr, "roscoe upgrade: the saved link is no longer valid; starting a fresh one")
 	}
 
 	clientID := relay.NewClientID()
@@ -721,9 +728,22 @@ func normalizePhone(raw string) string {
 }
 
 func cmdRelay(ctx context.Context, _ string, args []string) int {
-	if len(args) == 0 || (args[0] != "status" && args[0] != "listen") {
-		fmt.Fprintln(os.Stderr, "usage: roscoe relay status | roscoe relay listen")
+	if len(args) == 0 || (args[0] != "status" && args[0] != "listen" && args[0] != "unlink") {
+		fmt.Fprintln(os.Stderr, "usage: roscoe relay status | roscoe relay listen | roscoe relay unlink")
 		return 2
+	}
+	if args[0] == "unlink" {
+		path := relay.CredsPath()
+		if err := os.Remove(path); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				fmt.Fprintln(os.Stderr, "roscoe relay unlink: this machine is not linked")
+				return 0
+			}
+			fmt.Fprintf(os.Stderr, "roscoe relay unlink: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "roscoe relay unlink: removed %s. Run \"roscoe upgrade --phone +1...\" to link again.\n", path)
+		return 0
 	}
 	creds, err := relay.LoadCreds()
 	if err != nil {
