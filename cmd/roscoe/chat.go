@@ -112,6 +112,25 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	sc.Printf("%sautonomy %d · subagents %s · %d wide%s", ansiFaint,
 		cfg.Autonomy.Level, cfg.Tiers.Subagents.Model, cfg.Tiers.Subagents.MaxConcurrent, ansiReset)
 
+	// A resumed conversation should be visible, not just loaded: replay the
+	// tail so the operator picks up where they left off.
+	if resumeFrom != "" {
+		if msgs, mErr := worker.RecentMessages(resumeFrom, 8); mErr == nil && len(msgs) > 0 {
+			sc.Print("")
+			sc.Printf("%s─ earlier in this conversation ─%s", ansiFaint, ansiReset)
+			for _, m := range msgs {
+				sc.Print("")
+				if m.Role == "user" {
+					sc.Print(ansiGreen + "› " + ansiReset + ansiBold + firstLines(m.Text, 3, 200) + ansiReset)
+					continue
+				}
+				sc.Print(ansiDim + firstLines(m.Text, 4, 300) + ansiReset)
+			}
+			sc.Print("")
+			sc.Printf("%s─ picking up here ─%s", ansiFaint, ansiReset)
+		}
+	}
+
 	for {
 		line, ok := keys.ReadLineOn(sc, "› ")
 		if !ok {
@@ -221,4 +240,22 @@ func watchResize(sc *screen) {
 	for range ch {
 		sc.Resize()
 	}
+}
+
+// firstLines renders a preview of replayed history: at most n lines and
+// maxChars characters, with an ellipsis when it was cut.
+func firstLines(text string, n, maxChars int) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	cut := false
+	if len(lines) > n {
+		lines, cut = lines[:n], true
+	}
+	out := strings.Join(lines, "\n")
+	if len(out) > maxChars {
+		out, cut = out[:maxChars], true
+	}
+	if cut {
+		out += " …"
+	}
+	return out
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FindSession locates sessionID's transcript under configDir/projects/*/,
@@ -174,4 +175,98 @@ func trimIntoNewSession(srcPath, destDir, sessionID string) (string, error) {
 	fmt.Fprintf(os.Stderr, "roscoe: this conversation is too large to reload whole; resuming its recent %d messages (%dKB) as session %s\n",
 		len(lines), bytesWritten/1024, newID)
 	return newID, nil
+}
+
+// Message is one conversational turn recovered from a transcript.
+type Message struct {
+	Role string // "user" or "assistant"
+	Text string
+}
+
+// RecentMessages returns up to max trailing user/assistant messages from a
+// transcript, so a resumed session can be shown to the operator rather than
+// only handed to the model. Tool calls, attachments, and bookkeeping are
+// skipped; empty messages are dropped.
+func RecentMessages(path string, max int) ([]Message, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("worker: open transcript: %w", err)
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), 32<<20)
+	var msgs []Message
+	for sc.Scan() {
+		line := sc.Bytes()
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if rec.Type != "user" && rec.Type != "assistant" {
+			continue
+		}
+		text := extractText(rec.Message.Content)
+		if text == "" || !operatorVisible(text) {
+			continue
+		}
+		msgs = append(msgs, Message{Role: rec.Type, Text: text})
+		if len(msgs) > max*4 { // keep the tail cheap on huge logs
+			msgs = msgs[len(msgs)-max*2:]
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("worker: read transcript: %w", err)
+	}
+	if len(msgs) > max {
+		msgs = msgs[len(msgs)-max:]
+	}
+	return msgs, nil
+}
+
+// operatorVisible filters out harness plumbing that was never part of the
+// conversation the operator had: injected reminders, task notifications, and
+// bare image placeholders.
+func operatorVisible(text string) bool {
+	switch {
+	case strings.HasPrefix(text, "<task-notification"),
+		strings.HasPrefix(text, "<system-reminder"),
+		strings.HasPrefix(text, "<cross-session-message"),
+		strings.HasPrefix(text, "[Image:"),
+		strings.HasPrefix(text, "[Request interrupted"):
+		return false
+	}
+	return true
+}
+
+// extractText pulls plain text out of a content field that may be a string or
+// a block array.
+func extractText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			parts = append(parts, strings.TrimSpace(b.Text))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
