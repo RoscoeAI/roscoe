@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -98,7 +99,7 @@ func TestImportSessionCopiesPreservingProjectDir(t *testing.T) {
 	const content = "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"
 	src := writeTranscript(t, srcCfg, "-Users-tim-code-app", sid, content)
 
-	if err := importSession(src, destCfg); err != nil {
+	if _, err := importSession(src, destCfg, "sess-1"); err != nil {
 		t.Fatalf("importSession: %v", err)
 	}
 
@@ -126,14 +127,14 @@ func TestImportSessionIdempotent(t *testing.T) {
 	const sid = "ffff1111-aaaa-4bbb-8ccc-777788889999"
 	src := writeTranscript(t, srcCfg, "proj", sid, "original\n")
 
-	if err := importSession(src, destCfg); err != nil {
+	if _, err := importSession(src, destCfg, "sess-1"); err != nil {
 		t.Fatalf("first importSession: %v", err)
 	}
 	// Change the source; a re-import must be a no-op, not an overwrite.
 	if err := os.WriteFile(src, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := importSession(src, destCfg); err != nil {
+	if _, err := importSession(src, destCfg, "sess-1"); err != nil {
 		t.Fatalf("second importSession: %v", err)
 	}
 
@@ -151,7 +152,7 @@ func TestImportSessionMissingSource(t *testing.T) {
 	destCfg := t.TempDir()
 	src := filepath.Join(t.TempDir(), "projects", "proj", "nope.jsonl")
 
-	err := importSession(src, destCfg)
+	_, err := importSession(src, destCfg, "sess-1")
 	if err == nil {
 		t.Fatal("importSession = nil error, want open failure")
 	}
@@ -161,5 +162,53 @@ func TestImportSessionMissingSource(t *testing.T) {
 	// No half-written destination file.
 	if _, statErr := os.Stat(filepath.Join(destCfg, "projects", "proj", "nope.jsonl")); !os.IsNotExist(statErr) {
 		t.Errorf("destination file exists after failed import (stat err = %v)", statErr)
+	}
+}
+
+func TestImportSessionTrimsOversizedTranscript(t *testing.T) {
+	srcDir := filepath.Join(t.TempDir(), "projects", "-Users-tim-code-app")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	src := filepath.Join(srcDir, sessionID+".jsonl")
+
+	// A log dominated by bookkeeping: only the conversation should survive,
+	// and only as much of it as fits.
+	var b strings.Builder
+	blob := strings.Repeat("x", 50_000)
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&b, `{"type":"attachment","sessionId":%q,"data":%q}`+"\n", sessionID, blob)
+		fmt.Fprintf(&b, `{"type":"user","sessionId":%q,"n":%d,"text":%q}`+"\n", sessionID, i, blob)
+		fmt.Fprintf(&b, `{"type":"file-history-snapshot","sessionId":%q}`+"\n", sessionID)
+	}
+	if err := os.WriteFile(src, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	destCfg := t.TempDir()
+	newID, err := importSession(src, destCfg, sessionID)
+	if err != nil {
+		t.Fatalf("importSession: %v", err)
+	}
+	if newID == sessionID {
+		t.Fatal("an oversized transcript must resume under a new session id")
+	}
+
+	out, err := os.ReadFile(filepath.Join(destCfg, "projects", "-Users-tim-code-app", newID+".jsonl"))
+	if err != nil {
+		t.Fatalf("trimmed transcript missing: %v", err)
+	}
+	if len(out) > maxResumeBytes+50_000 {
+		t.Errorf("trimmed transcript is %d bytes, want <= budget", len(out))
+	}
+	if strings.Contains(string(out), `"attachment"`) || strings.Contains(string(out), "file-history-snapshot") {
+		t.Error("bookkeeping records should be dropped")
+	}
+	if !strings.Contains(string(out), newID) || strings.Contains(string(out), sessionID) {
+		t.Error("session ids inside the trimmed transcript should be rewritten")
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Errorf("the original log must be left alone: %v", err)
 	}
 }

@@ -98,9 +98,12 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 		return nil, fmt.Errorf("worker: create config dir: %w", err)
 	}
 	if t.Resume != "" && t.ResumeFrom != "" {
-		if err := importSession(t.ResumeFrom, ccfgDir); err != nil {
+		resumeID, err := importSession(t.ResumeFrom, ccfgDir, t.Resume)
+		if err != nil {
 			return nil, err
 		}
+		// A trimmed import resumes under a new id.
+		t.Resume, sessionID = resumeID, resumeID
 	}
 
 	agentsJSON, err := BuildAgentsJSON(o.Cfg)

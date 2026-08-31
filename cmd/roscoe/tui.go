@@ -11,6 +11,9 @@ import (
 
 // ANSI palette, matched to roscoe.sh: phosphor green accent on the terminal's
 // own ground, dim parchment for secondary text.
+// boxRows is how many bottom rows the input box occupies.
+const boxRows = 3
+
 const (
 	ansiReset  = "\x1b[0m"
 	ansiGreen  = "\x1b[38;5;114m"
@@ -42,7 +45,9 @@ func newScreen() *screen {
 
 func (s *screen) measure() {
 	s.rows, s.cols = 24, 80
-	out, err := exec.Command("stty", "size").Output()
+	cmd := exec.Command("stty", "size")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
 	if err == nil {
 		if parts := strings.Fields(string(out)); len(parts) == 2 {
 			if r, err := strconv.Atoi(parts[0]); err == nil && r > 4 {
@@ -60,8 +65,8 @@ func (s *screen) Enter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = true
-	// Scroll region = rows 1..rows-1, then park the cursor inside it.
-	fmt.Fprintf(os.Stdout, "\x1b[1;%dr\x1b[%d;1H", s.rows-1, s.rows-1)
+	// Scroll region = everything above the input box; park the cursor there.
+	fmt.Fprintf(os.Stdout, "\x1b[1;%dr\x1b[%d;1H", s.rows-boxRows, s.rows-boxRows)
 }
 
 // Leave restores the full-screen scroll region.
@@ -73,6 +78,9 @@ func (s *screen) Leave() {
 	}
 	s.active = false
 	fmt.Fprintf(os.Stdout, "\x1b[r\x1b[%d;1H%s%s\n", s.rows, ansiClrEOL, ansiShow)
+	for i := 0; i < boxRows; i++ {
+		fmt.Fprint(os.Stdout, ansiClrEOL+"\n")
+	}
 }
 
 // Print writes a line into the scrolling region above the prompt.
@@ -85,7 +93,7 @@ func (s *screen) Print(line string) {
 	}
 	// Park at the last scrolling row, emit the line (which scrolls the region),
 	// then repaint the pinned prompt.
-	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s\n", ansiHide, s.rows-1, ansiClrEOL+line)
+	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s\n", ansiHide, s.rows-boxRows, ansiClrEOL+line)
 	s.drawPromptLocked()
 }
 
@@ -101,13 +109,39 @@ func (s *screen) SetPrompt(prompt, input string) {
 	s.drawPromptLocked()
 }
 
+// drawPromptLocked paints the three-row input box across the bottom.
 func (s *screen) drawPromptLocked() {
 	if !s.active {
 		return
 	}
-	line := ansiGreen + s.prompt + ansiReset + s.input
-	// Move to the pinned row, clear it, draw, leave the cursor after the input.
-	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s%s", s.rows, ansiClrEOL, line, ansiShow)
+	inner := s.cols - 2
+	if inner < 10 {
+		inner = 10
+	}
+	top := "╭" + strings.Repeat("─", inner) + "╮"
+	bottom := "╰" + strings.Repeat("─", inner) + "╯"
+
+	// The visible input scrolls with the cursor when it outgrows the box.
+	body := s.prompt + s.input
+	visible := body
+	if len([]rune(visible)) > inner-2 {
+		r := []rune(visible)
+		visible = string(r[len(r)-(inner-2):])
+	}
+	pad := inner - 1 - len([]rune(visible))
+	if pad < 0 {
+		pad = 0
+	}
+
+	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s%s%s",
+		ansiHide, s.rows-2, ansiClrEOL, ansiFaint, top, ansiReset)
+	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s│%s %s%s%s%s│%s",
+		s.rows-1, ansiClrEOL, ansiFaint, ansiReset,
+		ansiGreen+s.prompt+ansiReset, s.input, strings.Repeat(" ", pad), ansiFaint, ansiReset)
+	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s%s%s",
+		s.rows, ansiClrEOL, ansiFaint, bottom, ansiReset)
+	// Park the cursor just after the typed text, inside the box.
+	fmt.Fprintf(os.Stdout, "\x1b[%d;%dH%s", s.rows-1, 3+len([]rune(body)), ansiShow)
 }
 
 // Resize re-measures the terminal and re-establishes the region.
@@ -124,6 +158,11 @@ func (s *screen) Resize() {
 
 // Banner prints the chat header in the site's voice.
 func (s *screen) Banner(model, harness, dir string) {
-	s.Print(ansiGreen + ansiBold + "roscoe" + ansiReset + ansiDim + "  " + model + " · " + harness + " · " + dir + ansiReset)
-	s.Print(ansiFaint + "enter to send · esc interrupts a turn · /help for commands" + ansiReset)
+	home, _ := os.UserHomeDir()
+	shown := dir
+	if home != "" && strings.HasPrefix(dir, home) {
+		shown = "~" + dir[len(home):]
+	}
+	s.Print("")
+	s.Print(ansiGreen + ansiBold + "  roscoe" + ansiReset + ansiFaint + "  " + model + " · " + harness + " · " + shown + ansiReset)
 }

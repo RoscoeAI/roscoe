@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
-	"os/signal"
-	"syscall"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"roscoe.sh/roscoe/internal/config"
@@ -108,6 +109,8 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	defer sc.Leave()
 	go watchResize(sc)
 	sc.Banner(cfg.Tiers.Middle.Model, harnessLabel, *dir)
+	sc.Printf("%sautonomy %d · subagents %s · %d wide%s", ansiFaint,
+		cfg.Autonomy.Level, cfg.Tiers.Subagents.Model, cfg.Tiers.Subagents.MaxConcurrent, ansiReset)
 
 	for {
 		line, ok := keys.ReadLineOn(sc, "› ")
@@ -141,7 +144,30 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			sc.Print(ansiDim + "started a fresh session" + ansiReset)
 			continue
 		case msg == "/help":
-			sc.Print(ansiDim + "/exit  /new  /session  /help · esc interrupts the current turn" + ansiReset)
+			sc.Print(ansiDim + "/autonomy [0-100]  /session  /new  /exit · esc interrupts a turn" + ansiReset)
+			continue
+		case strings.HasPrefix(msg, "/autonomy"):
+			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/autonomy"))
+			if arg == "" {
+				sc.Printf("%sautonomy %d · 100 means roscoe never interrupts you%s", ansiDim, cfg.Autonomy.Level, ansiReset)
+				continue
+			}
+			level, convErr := strconv.Atoi(arg)
+			if convErr != nil || level < 0 || level > 100 {
+				sc.Print(ansiDim + "usage: /autonomy 0-100" + ansiReset)
+				continue
+			}
+			cfg.Autonomy.Level = level
+			if path, perr := resolveConfigPath(explicit); perr == nil {
+				if saved, lerr := config.Load(path); lerr == nil {
+					saved.Autonomy.Level = level
+					if serr := saved.Save(path); serr == nil {
+						sc.Printf("%sautonomy %d · saved to %s%s", ansiGreen, level, path, ansiReset)
+						continue
+					}
+				}
+			}
+			sc.Printf("%sautonomy %d · this session only%s", ansiDim, level, ansiReset)
 			continue
 		}
 
@@ -187,7 +213,6 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		}
 	}
 }
-
 
 // watchResize keeps the pinned prompt correct when the window changes.
 func watchResize(sc *screen) {
