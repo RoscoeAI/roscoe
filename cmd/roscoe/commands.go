@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -232,11 +233,29 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	harness := fl.String("harness", "", `worker harness: "claude" (default) or "codex" (overrides tiers.middle.harness)`)
 	_ = fl.Parse(args)
 	rest := fl.Args()
+	var prompt string
 	if len(rest) == 0 {
-		fmt.Fprintln(os.Stderr, `usage: roscoe run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]`)
-		return 2
+		// No prompt argument: ask for it, so `roscoe run --resume <id>` alone
+		// is a usable entry point. Non-interactive callers still get usage.
+		if !isTTY(os.Stdin) {
+			fmt.Fprintln(os.Stderr, `usage: roscoe run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]`)
+			return 2
+		}
+		fmt.Fprint(os.Stderr, "prompt> ")
+		sc := bufio.NewScanner(os.Stdin)
+		sc.Buffer(make([]byte, 0, 64*1024), 10<<20)
+		if !sc.Scan() {
+			fmt.Fprintln(os.Stderr)
+			return 130
+		}
+		prompt = strings.TrimSpace(sc.Text())
+		if prompt == "" {
+			fmt.Fprintln(os.Stderr, "roscoe run: empty prompt")
+			return 2
+		}
+	} else {
+		prompt = rest[0]
 	}
-	prompt := rest[0]
 
 	resumeFrom := ""
 	if *resume != "" {

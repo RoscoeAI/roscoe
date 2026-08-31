@@ -62,6 +62,8 @@ func realMain() int {
 		return cmdSmoke(ctx, *cfgPath, rest)
 	case "run":
 		return cmdRun(ctx, *cfgPath, rest)
+	case "chat":
+		return cmdChat(ctx, *cfgPath, rest)
 	case "notify":
 		return cmdNotify(ctx, *cfgPath, rest)
 	case "upgrade":
@@ -92,6 +94,7 @@ commands:
                                           run one task through a local worker;
                                           esc interrupts + lets you type a redirect;
                                           --resume migrates + continues an existing claude session
+  chat [--dir D] [--resume <session-id>]  hold a conversation with one worker
   notify test [msg] | notify serve        exercise the escalation channel
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
   relay status | listen | unlink          inspect the link, tail replies, or clear it
