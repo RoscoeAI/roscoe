@@ -96,3 +96,30 @@ func (k *keyReader) ReadLine(promptStr string) (string, bool) {
 	}
 	return "", false
 }
+
+// ReadLineOn collects a line into the pinned prompt of a screen, repainting
+// as the operator types. Enter submits; Esc or Ctrl+C abort (ok=false).
+func (k *keyReader) ReadLineOn(sc *screen, promptStr string) (string, bool) {
+	var b []byte
+	sc.SetPrompt(promptStr, "")
+	for c := range k.events {
+		switch {
+		case c == '\r' || c == '\n':
+			line := string(b)
+			sc.SetPrompt(promptStr, "")
+			return line, true
+		case c == 0x7f || c == 0x08:
+			if len(b) > 0 {
+				b = b[:len(b)-1]
+			}
+		case c == 0x1b || c == 0x03:
+			return "", false
+		case c >= 0x20 && c < 0x7f:
+			b = append(b, c)
+		default:
+			continue
+		}
+		sc.SetPrompt(promptStr, string(b))
+	}
+	return "", false
+}

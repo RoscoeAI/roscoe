@@ -80,9 +80,20 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			return nil, fmt.Errorf("worker: create task dir: %w", err)
 		}
 	}
-	// Isolated per-task config dir — concurrent claude processes sharing one
-	// CLAUDE_CONFIG_DIR corrupt session state.
+	// With a fleet account token, each task gets an isolated config dir —
+	// concurrent claude processes sharing one CLAUDE_CONFIG_DIR corrupt
+	// session state. Without one, run under the operator's own claude config
+	// so their existing login (keychain or credentials file) authenticates;
+	// an empty isolated dir would have no credentials at all.
+	ownAuth := t.Token == ""
 	ccfgDir := filepath.Join(config.ExpandPath(o.Cfg.StateDir), "workers", t.ID, "ccfg")
+	if ownAuth {
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return nil, fmt.Errorf("worker: resolve home: %w", herr)
+		}
+		ccfgDir = filepath.Join(home, ".claude")
+	}
 	if err := os.MkdirAll(ccfgDir, 0o755); err != nil {
 		return nil, fmt.Errorf("worker: create config dir: %w", err)
 	}
@@ -158,19 +169,12 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			args = append(args, "--session-id", sessionID)
 		}
 
-		env = append(os.Environ(),
-			"CLAUDE_CONFIG_DIR="+ccfgDir,
-			"ANTHROPIC_BASE_URL=http://"+o.RouterAddr,
-		)
-		if t.Token != "" {
-			env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+t.Token)
-		} else {
-			// No account token: a fresh CLAUDE_CONFIG_DIR has no credentials and
-			// claude refuses to run ("Not logged in"). A dummy gateway bearer
-			// satisfies auth against the loopback router; it only works end-to-end
-			// when no route needs "account" (header-passthrough) auth — i.e.
-			// all-tier3/all-env-auth configs.
-			env = append(env, "ANTHROPIC_AUTH_TOKEN=roscoe-local")
+		env = append(os.Environ(), "ANTHROPIC_BASE_URL=http://"+o.RouterAddr)
+		if !ownAuth {
+			env = append(env,
+				"CLAUDE_CONFIG_DIR="+ccfgDir,
+				"CLAUDE_CODE_OAUTH_TOKEN="+t.Token,
+			)
 		}
 		env = append(env, "CLAUDE_CODE_SUBAGENT_MODEL="+sub.VirtualModel)
 		if sub.MapHaikuAlias {

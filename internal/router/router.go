@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"roscoe.sh/roscoe/internal/config"
@@ -91,7 +92,15 @@ func New(o Options) (*Router, error) {
 	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(bind, strconv.Itoa(port)))
 	if err != nil {
-		return nil, fmt.Errorf("router: listen %s port %d: %w", bind, port, err)
+		// A busy port usually means another roscoe session already owns it.
+		// Sessions are meant to run side by side, so take an ephemeral port
+		// rather than refusing to start.
+		if errors.Is(err, syscall.EADDRINUSE) && port != 0 {
+			ln, err = net.Listen("tcp", net.JoinHostPort(bind, "0"))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("router: listen %s port %d: %w", bind, port, err)
+		}
 	}
 
 	rt := &Router{

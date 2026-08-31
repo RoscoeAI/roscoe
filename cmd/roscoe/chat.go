@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os/signal"
+	"syscall"
 	"flag"
 	"fmt"
 	"os"
@@ -101,36 +103,45 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	if harnessLabel == "" {
 		harnessLabel = "claude"
 	}
-	fmt.Fprintf(os.Stderr, "roscoe chat · %s · %s in %s\n", cfg.Tiers.Middle.Model, harnessLabel, *dir)
-	fmt.Fprintln(os.Stderr, "type a message and press enter · esc interrupts a turn · /exit to quit")
+	sc := newScreen()
+	sc.Enter()
+	defer sc.Leave()
+	go watchResize(sc)
+	sc.Banner(cfg.Tiers.Middle.Model, harnessLabel, *dir)
 
 	for {
-		line, ok := keys.ReadLine("\nyou> ")
+		line, ok := keys.ReadLineOn(sc, "› ")
 		if !ok {
-			fmt.Fprintln(os.Stderr, "\nroscoe chat: bye")
+			sc.Leave()
+			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
 			return 0
 		}
 		msg := strings.TrimSpace(line)
+		if msg != "" && !strings.HasPrefix(msg, "/") {
+			sc.Print("")
+			sc.Print(ansiGreen + "› " + ansiReset + ansiBold + msg + ansiReset)
+		}
 		switch {
 		case msg == "":
 			continue
 		case msg == "/exit" || msg == "/quit":
+			sc.Leave()
 			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
 			return 0
 		case msg == "/session":
 			if session == "" {
-				fmt.Fprintln(os.Stderr, "no session yet")
+				sc.Print(ansiDim + "no session yet" + ansiReset)
 			} else {
-				fmt.Fprintf(os.Stderr, "session %s · resume later: roscoe chat --resume %s\n", session, session)
+				sc.Printf("%ssession %s · resume later: roscoe chat --resume %s%s", ansiDim, session, session, ansiReset)
 			}
 			continue
 		case msg == "/new":
 			session, resumeFrom = "", ""
 			*taskID = newTaskID()
-			fmt.Fprintln(os.Stderr, "started a fresh session")
+			sc.Print(ansiDim + "started a fresh session" + ansiReset)
 			continue
 		case msg == "/help":
-			fmt.Fprintln(os.Stderr, "/exit  /new  /session  /help · esc interrupts the current turn")
+			sc.Print(ansiDim + "/exit  /new  /session  /help · esc interrupts the current turn" + ansiReset)
 			continue
 		}
 
@@ -139,7 +150,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		go func() {
 			if keys.WaitEsc(turnCtx) {
 				escPressed.Store(true)
-				fmt.Fprintln(os.Stderr, "\n[esc] interrupting this turn…")
+				sc.Print(ansiDim + "esc · interrupting this turn…" + ansiReset)
 				cancelTurn()
 			}
 		}()
@@ -150,7 +161,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 				if ie, ok := ev.AsInit(); ok && ie.SessionID != "" {
 					session = ie.SessionID
 				}
-				narrate(ev)
+				narrateTo(sc, ev)
 			}},
 		)
 		cancelTurn()
@@ -161,19 +172,28 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		}
 		switch {
 		case escPressed.Load():
-			fmt.Fprintln(os.Stderr, "[esc] stopped. Say what you want instead.")
+			sc.Print(ansiDim + "stopped · say what you want instead" + ansiReset)
 		case ctx.Err() != nil:
-			fmt.Fprintln(os.Stderr, "\nroscoe chat: bye")
+			sc.Leave()
+			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
 			return 0
 		case runErr != nil:
-			fmt.Fprintf(os.Stderr, "roscoe chat: %v\n", runErr)
+			sc.Printf("%serror · %v%s", ansiGreen, runErr, ansiReset)
 		case res != nil:
-			out := strings.TrimSpace(res.Result)
-			if out != "" {
-				fmt.Printf("\n%s\n", out)
+			for _, l := range strings.Split(strings.TrimSpace(res.Result), "\n") {
+				sc.Print(l)
 			}
-			fmt.Fprintf(os.Stderr, "[turn] cost=$%.4f\n", res.TotalCostUSD)
+			sc.Printf("%s%.4f USD this turn%s", ansiFaint, res.TotalCostUSD, ansiReset)
 		}
 	}
 }
 
+
+// watchResize keeps the pinned prompt correct when the window changes.
+func watchResize(sc *screen) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGWINCH)
+	for range ch {
+		sc.Resize()
+	}
+}

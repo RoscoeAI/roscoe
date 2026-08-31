@@ -272,16 +272,15 @@ func TestRunFreshArgsEnvAndResult(t *testing.T) {
 	}
 
 	env := s.env(t)
-	ccfg := filepath.Join(s.stateDir, "workers", "task-1", "ccfg")
-	wantEnv(t, env, "CLAUDE_CONFIG_DIR", ccfg)
-	if fi, err := os.Stat(ccfg); err != nil || !fi.IsDir() {
-		t.Errorf("isolated config dir %s not created: fi=%v err=%v", ccfg, fi, err)
-	}
+	// No account token: the worker must inherit the operator's own claude
+	// config and login. Overriding CLAUDE_CONFIG_DIR here would hand claude an
+	// empty credential store and every claude-* call would 401.
+	wantEnv(t, env, "CLAUDE_CONFIG_DIR", "")
+	wantEnv(t, env, "ANTHROPIC_AUTH_TOKEN", "")
+	wantEnv(t, env, "CLAUDE_CODE_OAUTH_TOKEN", "")
 	wantEnv(t, env, "ANTHROPIC_BASE_URL", "http://127.0.0.1:18484")
 	wantEnv(t, env, "CLAUDE_CODE_SUBAGENT_MODEL", "roscoe/tier3-test")
 	wantEnv(t, env, "ANTHROPIC_DEFAULT_HAIKU_MODEL", "roscoe/tier3-test")
-	wantEnv(t, env, "ANTHROPIC_AUTH_TOKEN", "roscoe-local") // no account token
-	wantEnv(t, env, "CLAUDE_CODE_OAUTH_TOKEN", "")
 	wantEnv(t, env, "API_TIMEOUT_MS", "12345")
 	wantEnv(t, env, "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", "8")
 	wantEnv(t, env, "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "2")
@@ -334,11 +333,19 @@ func TestRunTaskIDDefaultsToSessionID(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	sid := argValue(t, s.args(t), "--session-id")
-	ccfg := filepath.Join(s.stateDir, "workers", sid, "ccfg")
-	if fi, err := os.Stat(ccfg); err != nil || !fi.IsDir() {
-		t.Errorf("config dir keyed by session id %s missing: err=%v", ccfg, err)
+	if sid == "" {
+		t.Fatal("no --session-id on a fresh run")
 	}
-	wantEnv(t, s.env(t), "CLAUDE_CONFIG_DIR", ccfg)
+	// Fleet mode (token present) is what isolates the config dir.
+	s2 := newStubRun(t)
+	if _, err := Run(context.Background(), Task{ID: "t-iso", Prompt: "p", Token: "sk-test-1"}, s2.opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ccfg := filepath.Join(s2.stateDir, "workers", "t-iso", "ccfg")
+	if fi, err := os.Stat(ccfg); err != nil || !fi.IsDir() {
+		t.Errorf("isolated config dir %s missing: err=%v", ccfg, err)
+	}
+	wantEnv(t, s2.env(t), "CLAUDE_CONFIG_DIR", ccfg)
 }
 
 func TestRunOAuthTokenEnv(t *testing.T) {
@@ -370,40 +377,64 @@ func TestRunZeroValuedOptionalEnvSkipped(t *testing.T) {
 }
 
 func TestRunResumeImportsTranscript(t *testing.T) {
+	// HOME is redirected: with no account token the worker runs under the
+	// operator's own ~/.claude, and a test must never write into the real one.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	s := newStubRun(t)
-
-	srcCfg := t.TempDir()
-	const sid = "11111111-2222-4333-8444-555555555555"
-	projDir := filepath.Join(srcCfg, "projects", "-Users-tim-code-app")
-	if err := os.MkdirAll(projDir, 0o755); err != nil {
+	src := filepath.Join(t.TempDir(), "projects", "-Users-tim-code-app")
+	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srcPath := filepath.Join(projDir, sid+".jsonl")
-	transcript := `{"type":"user","text":"hello"}` + "\n"
-	if err := os.WriteFile(srcPath, []byte(transcript), 0o644); err != nil {
+	sessionID := "11111111-2222-4333-8444-555555555555"
+	srcFile := filepath.Join(src, sessionID+".jsonl")
+	if err := os.WriteFile(srcFile, []byte(`{"type":"user"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	// Empty Task.ID: on resume the task id becomes the resume session id.
-	if _, err := Run(context.Background(), Task{Prompt: "continue", Resume: sid, ResumeFrom: srcPath}, s.opts); err != nil {
+	if _, err := Run(context.Background(), Task{
+		ID: sessionID, Prompt: "keep going", Resume: sessionID, ResumeFrom: srcFile,
+	}, s.opts); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	args := s.args(t)
-	if got := argValue(t, args, "--resume"); got != sid {
-		t.Errorf("--resume = %q, want %q", got, sid)
+	if got := argValue(t, args, "--resume"); got != sessionID {
+		t.Errorf("--resume = %q, want %q", got, sessionID)
 	}
 	if hasFlag(args, "--session-id") {
-		t.Error("--session-id present on a resumed run")
+		t.Error("--session-id must not accompany --resume")
+	}
+	// Own-auth mode imports into the operator's config dir.
+	dest := filepath.Join(home, ".claude", "projects", "-Users-tim-code-app", sessionID+".jsonl")
+	if _, err := os.Stat(dest); err != nil {
+		t.Errorf("imported transcript missing: %v", err)
+	}
+}
+
+func TestRunResumeImportsIntoIsolatedDirWithToken(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newStubRun(t)
+	src := filepath.Join(t.TempDir(), "projects", "-Users-tim-code-app")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "22222222-3333-4444-8555-666666666666"
+	srcFile := filepath.Join(src, sessionID+".jsonl")
+	if err := os.WriteFile(srcFile, []byte(`{"type":"user"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	imported := filepath.Join(s.stateDir, "workers", sid, "ccfg", "projects", "-Users-tim-code-app", sid+".jsonl")
-	got, err := os.ReadFile(imported)
-	if err != nil {
-		t.Fatalf("imported transcript missing: %v", err)
+	if _, err := Run(context.Background(), Task{
+		ID: "iso-resume", Prompt: "keep going", Token: "sk-test-9",
+		Resume: sessionID, ResumeFrom: srcFile,
+	}, s.opts); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if string(got) != transcript {
-		t.Errorf("imported transcript = %q, want %q", got, transcript)
+	dest := filepath.Join(s.stateDir, "workers", "iso-resume", "ccfg", "projects", "-Users-tim-code-app", sessionID+".jsonl")
+	if _, err := os.Stat(dest); err != nil {
+		t.Errorf("fleet mode should import into the isolated config dir: %v", err)
 	}
 }
 

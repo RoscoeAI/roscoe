@@ -459,6 +459,43 @@ func resolveMiddleAccount(cfg *config.Config, env map[string]string) (name, toke
 	return "", ""
 }
 
+// narrateTo prints one readable line per stream-json event onto a pinned
+// screen (chat), keeping the prompt row intact.
+func narrateTo(sc *screen, ev *streamjson.Event) {
+	if ev == nil {
+		return
+	}
+	if ie, ok := ev.AsInit(); ok {
+		sc.Printf("%s%s · session %s%s", ansiFaint, ie.Model, shortID(ie.SessionID), ansiReset)
+		return
+	}
+	if re, ok := ev.AsResult(); ok {
+		_ = re
+		return // the caller prints the answer and cost
+	}
+	switch ev.Type {
+	case "assistant":
+		text, tools := assistantContent(ev.Raw)
+		switch {
+		case text != "":
+			sc.Printf("%s%s%s", ansiDim, snippet(text), ansiReset)
+		case len(tools) > 0:
+			sc.Printf("%s· %s%s", ansiFaint, strings.Join(tools, ", "), ansiReset)
+		}
+	case "system":
+		if ev.Subtype == "api_retry" {
+			sc.Printf("%s· retrying after an API error%s", ansiFaint, ansiReset)
+		}
+	}
+}
+
+func shortID(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
 // narrate prints one readable line per stream-json event to stderr.
 func narrate(ev *streamjson.Event) {
 	if ev == nil {
