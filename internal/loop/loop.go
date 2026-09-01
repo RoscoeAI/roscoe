@@ -77,6 +77,16 @@ type Options struct {
 	// DefaultMaxConsecutiveErrors.
 	MaxConsecutiveErrors int
 
+	// Recall is asked, before each dispatch, what the fleet already knows
+	// about this charter. Whatever it returns is written into loop.md's
+	// RecalledSection for the worker to read, so the worker never learns a
+	// graph exists and the codex path works identically. Optional: a nil
+	// Recall, an error, or an empty string all mean "no recall this run",
+	// never a failed iteration.
+	Recall func(ctx context.Context, it Iteration) string
+	// Signal reports back whether that recall helped, after the judge rules.
+	Signal func(ctx context.Context, it Iteration, d Decision)
+
 	// OnIteration reports progress; may be nil.
 	OnIteration func(it Iteration, d Decision)
 }
@@ -141,6 +151,18 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		// this is what makes losing an entry impossible rather than merely
 		// discouraged.
 		before, _ := Read(o.Dir)
+		if o.Recall != nil {
+			cur := Iteration{N: n, Charter: o.Charter, LoopMD: before, Status: ParseStatus(before)}
+			if recalled := strings.TrimSpace(o.Recall(ctx, cur)); recalled != "" {
+				merged := setSection(before, RecalledSection, recalled)
+				if werr := Write(o.Dir, merged); werr == nil {
+					before = merged
+					o.note("loop.recalled", map[string]any{
+						"task": o.TaskID, "iteration": n, "bytes": len(recalled),
+					})
+				}
+			}
+		}
 		res, session, err := o.Dispatch(ctx, Iteration{N: n, Charter: o.Charter}, prompt, resume)
 		if session != "" {
 			resume, sum.Session = session, session
@@ -230,6 +252,9 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 			return sum, jerr
 		}
 		o.report(it, d)
+		if o.Signal != nil {
+			o.Signal(ctx, it, d)
+		}
 
 		if d.Action != Continue {
 			sum.Action, sum.Reason = d.Action, d.Reason

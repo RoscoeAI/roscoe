@@ -66,6 +66,8 @@ func realMain() int {
 		return cmdChat(ctx, *cfgPath, rest)
 	case "loop":
 		return cmdLoop(ctx, *cfgPath, rest)
+	case "memory":
+		return cmdMemory(ctx, *cfgPath, rest)
 	case "notify":
 		return cmdNotify(ctx, *cfgPath, rest)
 	case "upgrade":
@@ -101,6 +103,7 @@ commands:
                                           work a charter to completion: dispatch,
                                           read loop.md, judge, dispatch again;
                                           esc stops after the current iteration
+  memory status | build | query | reflect inspect and maintain cross-run memory
   notify test [msg] | notify serve        exercise the escalation channel
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
   relay status | listen | unlink          inspect the link, tail replies, or clear it

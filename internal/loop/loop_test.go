@@ -480,3 +480,82 @@ func TestOneFailureKeepsTheSession(t *testing.T) {
 		t.Errorf("a single failure dropped the session (%q); it should retry warm", f.resumes[1])
 	}
 }
+
+// Recall is written into loop.md before the worker runs, so the worker just
+// reads its memory file and never learns a graph exists.
+func TestRecallIsWrittenIntoTheMemoryFile(t *testing.T) {
+	dir := t.TempDir()
+	var sawInPrompt string
+	dispatch := func(_ context.Context, _ Iteration, _, _ string) (*streamjson.ResultEvent, string, error) {
+		md, _ := Read(dir)
+		sawInPrompt = md
+		_ = Write(dir, "## Status\ndone\n")
+		return &streamjson.ResultEvent{SessionID: "s"}, "s", nil
+	}
+	var signalled []Action
+	sum, err := Run(context.Background(), Options{
+		Dir: dir, Charter: "x", Dispatch: dispatch,
+		Recall: func(context.Context, Iteration) string { return "- the auth module lives in internal/auth" },
+		Signal: func(_ context.Context, _ Iteration, d Decision) { signalled = append(signalled, d.Action) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Action != Done {
+		t.Errorf("action = %s", sum.Action)
+	}
+	if !strings.Contains(sawInPrompt, "internal/auth") {
+		t.Errorf("the worker did not see the recall in loop.md:\n%s", sawInPrompt)
+	}
+	if !strings.Contains(sawInPrompt, "## "+RecalledSection) {
+		t.Error("recall was not put under its own heading")
+	}
+	if len(signalled) != 1 || signalled[0] != Done {
+		t.Errorf("signalled %v, want one Done", signalled)
+	}
+}
+
+// Memory is never in the hot path: a recall that fails, hangs, or says nothing
+// must cost the run nothing at all.
+func TestRecallFailureNeverBreaksTheLoop(t *testing.T) {
+	for name, recall := range map[string]func(context.Context, Iteration) string{
+		"empty":      func(context.Context, Iteration) string { return "" },
+		"whitespace": func(context.Context, Iteration) string { return "   \n  " },
+		"panic-free": nil,
+	} {
+		dir := t.TempDir()
+		dispatch := func(_ context.Context, _ Iteration, _, _ string) (*streamjson.ResultEvent, string, error) {
+			_ = Write(dir, "## Status\ndone\n")
+			return &streamjson.ResultEvent{}, "", nil
+		}
+		sum, err := Run(context.Background(), Options{
+			Dir: dir, Charter: "x", Dispatch: dispatch, Recall: recall,
+		})
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if sum.Action != Done {
+			t.Errorf("%s: action = %s, want done", name, sum.Action)
+		}
+		md, _ := Read(dir)
+		if strings.Contains(md, "## "+RecalledSection) {
+			t.Errorf("%s: an empty recall still wrote a heading:\n%s", name, md)
+		}
+	}
+}
+
+// Stale recall is worse than none, so the section is regenerated rather than
+// accumulated the way Tried and Notes are.
+func TestRecalledSectionIsNotPreserved(t *testing.T) {
+	before := "## Status\ncontinuing\n\n## " + RecalledSection + "\n- old and stale\n\n## Notes\n- a real fact\n"
+	after := "## Status\ncontinuing\n\n## Notes\n- a real fact\n"
+	merged, restored := MergePreserving(before, after)
+	if strings.Contains(merged, "old and stale") {
+		t.Errorf("stale recall was preserved:\n%s", merged)
+	}
+	for _, e := range restored {
+		if strings.Contains(e, "old and stale") {
+			t.Errorf("restored stale recall %q", e)
+		}
+	}
+}

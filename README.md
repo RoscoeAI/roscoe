@@ -18,10 +18,14 @@ Two principles run through everything:
   rare decision that clears your threshold reaches you by SMS and you settle it
   by replying to a text.
 - **Memory that compounds.** Roscoe is opinionated about memory: it leans on
-  [Graphify](https://github.com/Graphify-Labs/graphify), with the knowledge
-  graph living at `~/.roscoe/graph` next to the rest of the fleet state. Runs,
-  quorum decisions, and outcomes feed the graph, so the fleet learns your
-  codebase and its own mistakes as it goes.
+  [Graphify](https://github.com/Graphify-Labs/graphify), with a per-project
+  knowledge graph under `~/.roscoe/graph` next to the rest of the fleet state.
+  Before each iteration the fleet asks the graph what it already knows and
+  writes the answer into the run's working memory; after each one, the quorum's
+  decision goes back as a signal. So run 40 does not relearn what run 3 found.
+  Memory is never in the hot path: a graph that is missing, stale, or slow
+  costs you the recall and nothing else. `roscoe memory status` says where it
+  stands.
 
 ```
 curl -fsSL https://roscoe.sh/install | sh
@@ -169,14 +173,13 @@ laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 
 Early and moving fast. Working today: `init`, `config`, `router`, `smoke`,
 `chat` (a conversation with one worker), `loop` (a charter worked to
-completion), `run` (single-node; Claude Code
+completion), `memory` (the Graphify knowledge graph), `run` (single-node; Claude Code
 workers with full subagent swarms, or Codex workers via `--harness codex` /
 `tiers.middle.harness`), `notify`,
 `upgrade` + `relay` (hosted SMS), `version`. Codex workers are single-agent
 for now: the tier-3 swarm and `--resume` are Claude Code features. In
 flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
-(`accounts`), Graphify-backed
-memory, MCP dispatch into your interactive session, and a `roscoe top` TUI.
+(`accounts`), MCP dispatch into your interactive session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).
 
 ## Requirements

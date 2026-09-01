@@ -10,6 +10,11 @@ import (
 // it.
 var preservedSections = []string{"Tried", "Notes"}
 
+// RecalledSection is written by the supervisor from cross-run memory before
+// each dispatch. It is deliberately NOT preserved: it is derived, regenerated
+// every iteration, and stale recall is worse than none.
+const RecalledSection = "Recalled"
+
 // MergePreserving returns after, with any Tried or Notes entry that existed in
 // before and vanished from after put back. It also reports what it restored.
 //

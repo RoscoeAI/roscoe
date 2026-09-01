@@ -13,6 +13,7 @@ import (
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/loop"
+	"roscoe.sh/roscoe/internal/memory"
 	"roscoe.sh/roscoe/internal/quorum"
 	"roscoe.sh/roscoe/internal/router"
 	"roscoe.sh/roscoe/internal/streamjson"
@@ -175,6 +176,41 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 			len(cfg.Quorum.Voters), cfg.Quorum.Decide, cfg.Quorum.MinConfidence, cfg.Autonomy.Level)
 	}
 
+	// Cross-run memory. Recall is written into loop.md before each dispatch,
+	// so the worker just reads its memory file and never learns a graph
+	// exists; the codex path works identically. Every failure here is
+	// swallowed on purpose: memory is never allowed to break a loop.
+	mem := memory.New(cfg, *dir)
+	var recall func(context.Context, loop.Iteration) string
+	var signal func(context.Context, loop.Iteration, loop.Decision)
+	if mem.Ready() {
+		fmt.Fprintf(os.Stderr, "[memory] %s\n", mem.GraphPath())
+		var lastRecall string
+		recall = func(ctx context.Context, it loop.Iteration) string {
+			out, err := mem.Recall(ctx, charter, 1200)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  [memory] recall unavailable: %v\n", err)
+				return ""
+			}
+			lastRecall = out
+			return out
+		}
+		signal = func(ctx context.Context, it loop.Iteration, d loop.Decision) {
+			if lastRecall == "" {
+				return
+			}
+			outcome := memory.Useful
+			if it.Err != nil || d.Action == loop.Abort {
+				outcome = memory.DeadEnd
+			}
+			if err := mem.Record(ctx, charter, lastRecall, outcome); err != nil {
+				fmt.Fprintf(os.Stderr, "  [memory] signal not recorded: %v\n", err)
+			}
+		}
+	} else if mem.Enabled && mem.Installed() {
+		fmt.Fprintf(os.Stderr, "[memory] no graph yet for this project; build one with: roscoe memory build\n")
+	}
+
 	sum, err := loop.Run(loopCtx, loop.Options{
 		Charter:       charter,
 		Dir:           *dir,
@@ -184,6 +220,8 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 		Ledger:        led,
 		MaxIterations: *maxIter,
 		BudgetUSD:     *budget,
+		Recall:        recall,
+		Signal:        signal,
 		OnIteration: func(it loop.Iteration, d loop.Decision) {
 			fmt.Fprintf(os.Stderr, "[iteration %d] %s · %s · %.4f USD · %s\n",
 				it.N, it.Status, d.Action, it.SpentUSD, d.Reason)
@@ -202,6 +240,11 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 			fmt.Fprintf(os.Stderr, "[loop] pick it up with: roscoe run --resume %s \"...\"\n", sum.Session)
 		}
 		fmt.Fprintf(os.Stderr, "[loop] working memory: %s\n", loop.Path(*dir))
+		// Deterministic and model-free, so it is cheap to distil what this
+		// run learned into the cross-run lessons before exiting.
+		if path, rerr := mem.Reflect(context.WithoutCancel(ctx)); rerr == nil && path != "" {
+			fmt.Fprintf(os.Stderr, "[memory] lessons: %s\n", path)
+		}
 	}
 	if err != nil && loopCtx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "roscoe loop: %v\n", err)
