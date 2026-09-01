@@ -175,6 +175,21 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			"--max-budget-usd", strconv.FormatFloat(mid.MaxBudgetUSDPerTask, 'f', -1, 64),
 			"--model", mid.Model,
 		}
+		if mid.Lean() {
+			// Every round trip a worker makes re-reads the whole prompt
+			// prefix, so what is IN that prefix is the dominant cost of a
+			// fleet. A worker is not the operator's desktop: it does not need
+			// their MCP servers, personal skills, or agent definitions, and
+			// --allowedTools only gates permission, not the tokens those
+			// definitions cost. Measured 30,573 -> 16,853 prefix tokens.
+			// CLAUDE_CONFIG_DIR is deliberately NOT redirected here: on the
+			// own-auth path that is where the operator's login lives.
+			args = append(args,
+				"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`,
+				"--setting-sources", "project",
+				"--exclude-dynamic-system-prompt-sections",
+			)
+		}
 		if mid.Effort != "" {
 			args = append(args, "--effort", mid.Effort)
 		}

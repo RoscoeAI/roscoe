@@ -59,13 +59,36 @@ func Read(dir string) (string, error) {
 	return string(b), nil
 }
 
-// Write replaces loop.md.
+// Write replaces loop.md atomically. A truncating write would leave the run's
+// only durable memory half-written if anything died mid-write, and this file
+// is precisely what a crashed run is meant to be recovered from.
 func Write(dir, content string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create dir for %s: %w", FileName, err)
 	}
-	if err := os.WriteFile(Path(dir), []byte(content), 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, FileName+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp %s: %w", FileName, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once renamed
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write %s: %w", FileName, err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod %s: %w", FileName, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync %s: %w", FileName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", FileName, err)
+	}
+	if err := os.Rename(tmpName, Path(dir)); err != nil {
+		return fmt.Errorf("rename %s into place: %w", FileName, err)
 	}
 	return nil
 }
@@ -74,8 +97,13 @@ func Write(dir, content string) error {
 // whether it wrote. An existing file is never overwritten: resuming a run must
 // not throw away what earlier iterations learned.
 func EnsureSeeded(dir, charter string) (bool, error) {
-	if _, err := os.Stat(Path(dir)); err == nil {
-		return false, nil
+	// Stat succeeds on a zero-byte file, which is what a crashed or truncated
+	// write leaves behind. An empty loop.md is not memory worth keeping, and
+	// treating it as one hands the worker a file with no status at all.
+	if fi, err := os.Stat(Path(dir)); err == nil {
+		if fi.Size() > 0 {
+			return false, nil
+		}
 	} else if !os.IsNotExist(err) {
 		return false, fmt.Errorf("stat %s: %w", FileName, err)
 	}

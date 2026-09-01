@@ -107,6 +107,15 @@ type MiddleTier struct {
 	// which is roscoe's shape exactly: the worker plans, and the fan-out
 	// lands on the cheap tier-3 swarm through the router.
 	Effort string `json:"effort,omitempty"`
+	// LeanContext strips the operator's MCP servers, user-level settings,
+	// skills and agents from workers, and moves per-machine sections out of
+	// the system prompt. Workers keep the built-in tools and the project's
+	// own settings. Measured on this repo: a 30,573-token prompt prefix falls
+	// to 16,853 and a turn goes from $0.0163 to $0.0095. Every round trip a
+	// worker makes pays the prefix again, so this is the largest single lever
+	// on fleet cost. Defaults to true when unset; turn it off for a worker
+	// that needs your MCP servers or personal skills.
+	LeanContext *bool `json:"lean_context,omitempty"`
 	// Orchestrate nudges each worker to fan out with the Workflow tool
 	// instead of doing everything in one thread. Redundant under
 	// effort "ultracode" (and skipped there); use it to get the same fan-out
@@ -124,6 +133,10 @@ type MiddleTier struct {
 
 // SubagentTier: VirtualModel is the name tier-3 requests carry on the wire
 // ("roscoe/tier3"); the router rewrites it to Model on Provider.
+// Lean reports whether workers run with a stripped prompt prefix. Unset means
+// yes: an old config should get the cheaper default, not the expensive one.
+func (m MiddleTier) Lean() bool { return m.LeanContext == nil || *m.LeanContext }
+
 type SubagentTier struct {
 	Provider      string              `json:"provider"`
 	Model         string              `json:"model"`

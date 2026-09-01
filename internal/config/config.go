@@ -484,6 +484,7 @@ var docs = map[string]string{
 	"tiers.main":                                "the session you talk to",
 	"tiers.middle":                              "the headless workers that do the work",
 	"tiers.middle.harness":                      "claude or codex",
+	"tiers.middle.lean_context":                 "strip your MCP servers and personal skills from workers; a much cheaper prompt prefix",
 	"tiers.middle.effort":                       "reasoning effort; ultracode adds a planned workflow per task",
 	"tiers.middle.orchestrate":                  "fan out with workflows below ultracode effort; ultracode does it already",
 	"tiers.middle.provider":                     "which provider serves the worker model",

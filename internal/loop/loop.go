@@ -150,6 +150,13 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		if readErr != nil && err == nil {
 			err = readErr
 		}
+		// A turn the harness itself marked failed (its own budget cap, an API
+		// error it swallowed) is an error for the loop's purposes too.
+		// Otherwise a per-task budget set too low grinds silently to the
+		// iteration ceiling instead of stopping after three.
+		if err == nil && res != nil && res.IsError {
+			err = fmt.Errorf("iteration %d: the worker reported failure: %s", n, firstLine(res.Result))
+		}
 		it := Iteration{
 			N:        n,
 			Charter:  o.Charter,
@@ -255,4 +262,19 @@ Charter: %s`,
 		StatusContinuing, StatusDone, StatusBlocked,
 		StatusDone, StatusBlocked,
 		strings.TrimSpace(charter))
+}
+
+// firstLine trims a result to something that fits one ledger line.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	if s == "" {
+		return "(no detail)"
+	}
+	return s
 }

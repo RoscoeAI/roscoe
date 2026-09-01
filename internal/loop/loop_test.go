@@ -339,3 +339,87 @@ func TestWriteCreatesTheDirectory(t *testing.T) {
 		t.Errorf("loop.md was not created: %v", err)
 	}
 }
+
+// A zero-byte loop.md is what a crashed write leaves behind. Treating it as
+// existing memory hands the next worker a file with no status at all.
+func TestEmptyLoopFileIsReseeded(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seeded, err := EnsureSeeded(dir, "the charter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seeded {
+		t.Fatal("a zero-byte loop.md was treated as existing memory")
+	}
+	md, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md, "the charter") || ParseStatus(md) != StatusContinuing {
+		t.Errorf("re-seeded file is not usable:\n%s", md)
+	}
+}
+
+// loop.md is what a crashed run is recovered from, so a write must never be
+// observable half-done.
+func TestWriteIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	if err := Write(dir, "# first\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(dir, "# second, longer content\n"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "# second, longer content\n" {
+		t.Errorf("got %q", got)
+	}
+	// The temp file must not survive as litter beside loop.md.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != FileName {
+			t.Errorf("Write left %q behind", e.Name())
+		}
+	}
+}
+
+// A turn the harness marked failed counts as a failed iteration, so a per-task
+// budget set too low stops after MaxConsecutiveErrors instead of grinding to
+// the ceiling.
+func TestHarnessReportedFailureCountsAsAnError(t *testing.T) {
+	dir := t.TempDir()
+	calls := 0
+	dispatch := func(_ context.Context, _ Iteration, _, _ string) (*streamjson.ResultEvent, string, error) {
+		calls++
+		_ = Write(dir, "## Status\ncontinuing\n")
+		return &streamjson.ResultEvent{IsError: true, Result: "budget exceeded\nmore detail"}, "s1", nil
+	}
+	sum, err := Run(context.Background(), Options{
+		Dir: dir, Charter: "x", Dispatch: dispatch,
+		MaxIterations: 20, MaxConsecutiveErrors: 3,
+	})
+	if err == nil {
+		t.Fatal("a run of harness-reported failures should end in an error")
+	}
+	if sum.Action != Abort {
+		t.Errorf("action = %s, want abort", sum.Action)
+	}
+	if calls != 3 {
+		t.Errorf("dispatched %d times, want 3 before giving up", calls)
+	}
+	if !strings.Contains(sum.Reason, "budget exceeded") {
+		t.Errorf("reason should carry the worker's own message, got %q", sum.Reason)
+	}
+	if strings.Contains(sum.Reason, "more detail") {
+		t.Errorf("reason should be one line, got %q", sum.Reason)
+	}
+}

@@ -33,7 +33,15 @@ curl -fsSL https://roscoe.sh/install | sh
   headless). Nothing about your daily driver changes.
 - **Tier 2, workers.** Spawn-per-task `claude -p` sessions: the full Claude
   Code harness (tools, subagents, Workflows), headless, one fresh git worktree
-  and isolated `CLAUDE_CONFIG_DIR` per task. Workers run at
+  and isolated `CLAUDE_CONFIG_DIR` per task. A worker is not your desktop, so
+  it runs lean: no MCP servers, no user-level skills or agents, and per-machine
+  sections moved out of the system prompt. Every round trip a worker makes
+  re-reads its whole prompt prefix, which makes that prefix the single largest
+  cost in a fleet. Measured on the same charter, the same three iterations:
+  186 tools and 191 commands fall to 27 and 48, and the run goes from $0.7152
+  to $0.3354. Turn it off with
+  `roscoe config set tiers.middle.lean_context false` if workers need your MCP
+  tools. Workers run at
   `tiers.middle.effort: ultracode`, so each substantive task is planned as a
   workflow and fanned out rather than ground through in one thread. That is
   the whole economic argument: the planning happens on a top-tier model, the
