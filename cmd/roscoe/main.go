@@ -64,6 +64,8 @@ func realMain() int {
 		return cmdRun(ctx, *cfgPath, rest)
 	case "chat":
 		return cmdChat(ctx, *cfgPath, rest)
+	case "loop":
+		return cmdLoop(ctx, *cfgPath, rest)
 	case "notify":
 		return cmdNotify(ctx, *cfgPath, rest)
 	case "upgrade":
@@ -95,6 +97,10 @@ commands:
                                           esc interrupts + lets you type a redirect;
                                           --resume migrates + continues an existing claude session
   chat [--dir D] [--resume <session-id>]  hold a conversation with one worker
+  loop "<charter>" [--max-iterations N] [--budget USD] [--dir D] [--once]
+                                          work a charter to completion: dispatch,
+                                          read loop.md, judge, dispatch again;
+                                          esc stops after the current iteration
   notify test [msg] | notify serve        exercise the escalation channel
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
   relay status | listen | unlink          inspect the link, tail replies, or clear it

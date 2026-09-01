@@ -103,6 +103,34 @@ above the prompt describes whatever you are pointing at as you type.
 /config tiers.middle.effort high
 ```
 
+## Working a charter, not a prompt
+
+`roscoe run` answers a prompt. `roscoe loop` works a charter until it is done:
+
+```
+roscoe loop "get the integration suite green" --max-iterations 8 --budget 5
+```
+
+The loop is deterministic Go, not a prompt: dispatch an iteration, read what
+the worker left in `loop.md`, judge it, dispatch again. That matters in three
+ways. It works the same for either harness, since Codex has no loop of its own.
+Its state is on disk rather than inside a session, so you can kill the run,
+read the file, edit it, and pick up where it stopped. And it puts a decision
+point between iterations, which is where the quorum and `autonomy.level` will
+sit.
+
+`loop.md` is the working memory: the charter, the plan, what has been tried,
+and durable notes. Each iteration reads it and rewrites it, and sets a status
+of `continuing`, `done`, or `blocked`. `done` ends the run, `blocked` escalates.
+The iteration ceiling and the budget are the loop's to enforce, not the
+worker's, so no judgment call can spend past them. Esc stops after the current
+iteration so the worker still writes its memory rather than being cut off.
+
+Today the judge takes the worker at its word. The quorum replaces it: several
+models read the result and the file and decide done, retry, follow up, or
+escalate, with `autonomy.level` setting how much they absorb before you get a
+text.
+
 ## Text-message escalations
 
 When a run needs a human decision, Roscoe texts you and you reply from any
@@ -122,13 +150,15 @@ laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 ## Status
 
 Early and moving fast. Working today: `init`, `config`, `router`, `smoke`,
-`chat` (a conversation with one worker), `run` (single-node; Claude Code
+`chat` (a conversation with one worker), `loop` (a charter worked to
+completion), `run` (single-node; Claude Code
 workers with full subagent swarms, or Codex workers via `--harness codex` /
 `tiers.middle.harness`), `notify`,
 `upgrade` + `relay` (hosted SMS), `version`. Codex workers are single-agent
 for now: the tier-3 swarm and `--resume` are Claude Code features. In
 flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
-(`accounts`), the quorum with the autonomy dial enforced, Graphify-backed
+(`accounts`), the quorum judging each loop iteration with the autonomy dial
+enforced, Graphify-backed
 memory, MCP dispatch into your interactive session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).
 

@@ -1,0 +1,176 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"roscoe.sh/roscoe/internal/config"
+	"roscoe.sh/roscoe/internal/ledger"
+	"roscoe.sh/roscoe/internal/loop"
+	"roscoe.sh/roscoe/internal/router"
+	"roscoe.sh/roscoe/internal/streamjson"
+	"roscoe.sh/roscoe/internal/worker"
+)
+
+// cmdLoop runs a charter to completion instead of a prompt to an answer: the
+// supervisor dispatches an iteration, reads what the worker left in loop.md,
+// judges it, and dispatches again. Esc stops at a clean point.
+func cmdLoop(ctx context.Context, explicit string, args []string) int {
+	fl := flag.NewFlagSet("loop", flag.ExitOnError)
+	dir := fl.String("dir", "", "working directory (default: current directory)")
+	taskID := fl.String("task-id", "", "task id (default: generated)")
+	harness := fl.String("harness", "", `worker harness: "claude" (default) or "codex"`)
+	maxIter := fl.Int("max-iterations", loop.DefaultMaxIterations, "stop after this many iterations; -1 for no ceiling")
+	budget := fl.Float64("budget", 0, "stop once the run has spent this many dollars (0: no ceiling)")
+	once := fl.Bool("once", false, "run a single iteration and stop, whatever the status says")
+	_ = fl.Parse(args)
+
+	rest := fl.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, `usage: roscoe loop "<charter>" [--max-iterations N] [--budget USD] [--dir D]`)
+		return 2
+	}
+	charter := rest[0]
+	if len(rest) > 1 {
+		_ = fl.Parse(rest[1:])
+	}
+
+	cfg, env, _, err := loadConfigAndEnv(explicit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe loop: %v\n", err)
+		return 1
+	}
+	if *harness != "" {
+		cfg.Tiers.Middle.Harness = *harness
+	}
+	if *taskID == "" {
+		*taskID = newTaskID()
+	}
+	if *dir == "" {
+		if *dir, err = os.Getwd(); err != nil {
+			fmt.Fprintf(os.Stderr, "roscoe loop: getwd: %v\n", err)
+			return 1
+		}
+	}
+
+	var led *ledger.Ledger
+	if cfg.Reporting.Ledger != "" {
+		p := config.ExpandPath(strings.ReplaceAll(cfg.Reporting.Ledger, "{run_id}", *taskID))
+		if led, err = ledger.Open(filepath.Dir(p)); err != nil {
+			fmt.Fprintf(os.Stderr, "roscoe loop: open ledger: %v\n", err)
+			return 1
+		}
+		defer led.Close()
+	}
+
+	r, err := router.New(router.Options{Cfg: cfg, Env: env})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe loop: %v\n", err)
+		return 1
+	}
+	rctx, rcancel := context.WithCancel(ctx)
+	defer rcancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- r.ListenAndServe(rctx) }()
+	addr, err := waitHealthz(ctx, r.Addr, errCh, 3*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe loop: %v\n", err)
+		return 1
+	}
+
+	account, token := resolveMiddleAccount(cfg, env)
+	fmt.Fprintf(os.Stderr, "[router] listening on %s\n", addr)
+	fmt.Fprintf(os.Stderr, "[loop] %s dir=%s · %s\n", *taskID, *dir, loop.Path(*dir))
+
+	// Esc stops the loop at the end of the current iteration, so the worker
+	// finishes writing loop.md rather than being cut off mid-thought.
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	defer stopLoop()
+	var stopping atomic.Bool
+	if isTTY(os.Stdin) {
+		if keys, restoreTTY, kerr := newKeyReader(); kerr == nil {
+			defer restoreTTY()
+			fmt.Fprintln(os.Stderr, "[keys] esc stops after the current iteration")
+			go func() {
+				if keys.WaitEsc(loopCtx) {
+					stopping.Store(true)
+					fmt.Fprintln(os.Stderr, "\n[esc] stopping after this iteration…")
+				}
+			}()
+		}
+	}
+
+	// The codex harness cannot resume a session yet, so every iteration there
+	// starts cold and loop.md is the only continuity.
+	canResume := cfg.Tiers.Middle.Harness != "codex"
+
+	dispatch := func(ctx context.Context, it loop.Iteration, prompt, resume string) (*streamjson.ResultEvent, string, error) {
+		fmt.Fprintf(os.Stderr, "\n[iteration %d]\n", it.N)
+		session := ""
+		onEvent := func(ev *streamjson.Event) {
+			if ie, ok := ev.AsInit(); ok && ie.SessionID != "" {
+				session = ie.SessionID
+			}
+			narrate(ev)
+		}
+		if !canResume {
+			resume = ""
+		}
+		res, err := worker.Run(ctx,
+			worker.Task{ID: *taskID, Prompt: prompt, Dir: *dir, Account: account, Token: token, Resume: resume},
+			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: onEvent},
+		)
+		if res != nil && res.SessionID != "" {
+			session = res.SessionID
+		}
+		return res, session, err
+	}
+
+	judge := loop.Judge(loop.StatusJudge{})
+	if *once {
+		judge = loop.FixedJudge{D: loop.Decision{Action: loop.Done, Reason: "--once"}}
+	}
+
+	sum, err := loop.Run(loopCtx, loop.Options{
+		Charter:       charter,
+		Dir:           *dir,
+		TaskID:        *taskID,
+		Dispatch:      dispatch,
+		Judge:         judge,
+		Ledger:        led,
+		MaxIterations: *maxIter,
+		BudgetUSD:     *budget,
+		OnIteration: func(it loop.Iteration, d loop.Decision) {
+			fmt.Fprintf(os.Stderr, "[iteration %d] %s · %s · %.4f USD · %s\n",
+				it.N, it.Status, d.Action, it.SpentUSD, d.Reason)
+			// Esc asked to stop; let this iteration's decision be recorded,
+			// then end the run.
+			if stopping.Load() {
+				stopLoop()
+			}
+		},
+	})
+
+	if sum != nil {
+		fmt.Fprintf(os.Stderr, "\n[loop] %s after %d iterations · %.4f USD · %s\n",
+			sum.Action, sum.Iterations, sum.SpentUSD, sum.Reason)
+		if sum.Session != "" {
+			fmt.Fprintf(os.Stderr, "[loop] pick it up with: roscoe run --resume %s \"...\"\n", sum.Session)
+		}
+		fmt.Fprintf(os.Stderr, "[loop] working memory: %s\n", loop.Path(*dir))
+	}
+	if err != nil && loopCtx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "roscoe loop: %v\n", err)
+		return 1
+	}
+	if sum != nil && (sum.Action == loop.Abort || sum.Action == loop.Escalate) {
+		return 3 // ended without finishing the charter
+	}
+	return 0
+}
