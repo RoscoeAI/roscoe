@@ -210,3 +210,39 @@ func TestNoteForRowAlwaysSaysSomething(t *testing.T) {
 		}
 	}
 }
+
+// /settings is sold as the one surface for how the fleet is configured, so a
+// knob that ships without a row here quietly makes that claim false. These two
+// are the largest cost levers in the config.
+func TestSettingsCoversTheCostKnobs(t *testing.T) {
+	rows := settingsRows(config.Default())
+	var paths []string
+	for _, r := range rows {
+		if r.editable() {
+			paths = append(paths, r.path)
+		}
+	}
+	for _, want := range []string{"tiers.middle.lean_context", "tiers.middle.cache_ttl"} {
+		if !contains(paths, want) {
+			t.Errorf("%s has no row; /settings has drifted from the config", want)
+		}
+	}
+}
+
+// A bare "true" says nothing about what it does, and this panel is the only
+// place most people will ever read about it.
+func TestLeanRowExplainsItself(t *testing.T) {
+	for _, r := range settingsRows(config.Default()) {
+		if r.path != "tiers.middle.lean_context" {
+			continue
+		}
+		if r.raw != "true" {
+			t.Errorf("lean raw = %q, want the default true", r.raw)
+		}
+		if !strings.Contains(r.shown(), "MCP") {
+			t.Errorf("the lean row shows %q, which does not say what it strips", r.shown())
+		}
+		return
+	}
+	t.Fatal("no lean row")
+}

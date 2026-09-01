@@ -53,6 +53,13 @@ func settingsRows(cfg *config.Config) []settingRow {
 		{label: "provider", path: "tiers.middle.provider", raw: cfg.Tiers.Middle.Provider, choices: providers},
 		{label: "effort", path: "tiers.middle.effort", raw: cfg.Tiers.Middle.Effort, display: effortOf(cfg), choices: config.EffortLevels()},
 		{label: "harness", path: "tiers.middle.harness", raw: harnessOf(cfg), choices: []string{"claude", "codex"}},
+		{label: "lean", path: "tiers.middle.lean_context",
+			raw:     boolStr(cfg.Tiers.Middle.Lean()),
+			display: leanDisplay(cfg.Tiers.Middle.Lean()),
+			choices: []string{"true", "false"}},
+		{label: "cache", path: "tiers.middle.cache_ttl",
+			raw: cfg.Tiers.Middle.TTL(), display: cfg.Tiers.Middle.TTL() + " prompt cache",
+			choices: []string{"1h", "5m"}},
 
 		{heading: "tier 3   the swarm each worker fans out to"},
 		{label: "model", path: "tiers.subagents.model", raw: cfg.Tiers.Subagents.Model, choices: models},
@@ -66,6 +73,22 @@ func settingsRows(cfg *config.Config) []settingRow {
 		{label: "autonomy", path: "autonomy.level",
 			raw: fmt.Sprintf("%d", cfg.Autonomy.Level), choices: []string{"0", "25", "50", "75", "90", "100"}},
 	}
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// leanDisplay says what the setting does, not just its value: "true" alone
+// tells you nothing about what it strips.
+func leanDisplay(lean bool) string {
+	if lean {
+		return "true   no MCP servers or personal skills, much cheaper prefix"
+	}
+	return "false  workers load your full ~/.claude"
 }
 
 // effortOf names the empty case rather than showing a blank cell.

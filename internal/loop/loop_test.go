@@ -576,3 +576,49 @@ func invariantOf(prompt string) string {
 	}
 	return prompt[:i] + prompt[j+len(close):]
 }
+
+// Re-opening a charter a previous run finished must cost nothing. The
+// supervisor is holding the file; dispatching a worker to be told what is on
+// the line above is a whole iteration of spend.
+func TestFinishedLoopCostsNothingToReopen(t *testing.T) {
+	for status, want := range map[string]Action{StatusDone: Done, StatusBlocked: Escalate} {
+		dir := t.TempDir()
+		if err := Write(dir, "# c\n\n## Status\n"+status+"\n\n## Tried\n- already finished\n"); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		dispatch := func(context.Context, Iteration, string, string) (*streamjson.ResultEvent, string, error) {
+			calls++
+			return &streamjson.ResultEvent{TotalCostUSD: 0.29}, "", nil
+		}
+		sum, err := Run(context.Background(), Options{Dir: dir, Charter: "c", Dispatch: dispatch})
+		if err != nil {
+			t.Fatalf("%s: %v", status, err)
+		}
+		if calls != 0 {
+			t.Errorf("%s: dispatched %d workers to re-read a finished file", status, calls)
+		}
+		if sum.Action != want {
+			t.Errorf("%s: action = %s, want %s", status, sum.Action, want)
+		}
+		if sum.Iterations != 0 || sum.SpentUSD != 0 {
+			t.Errorf("%s: spent %.2f over %d iterations, want nothing", status, sum.SpentUSD, sum.Iterations)
+		}
+		if sum.Status != status {
+			t.Errorf("%s: summary status = %q", status, sum.Status)
+		}
+	}
+}
+
+// A fresh seed says continuing, so a first run must not be short-circuited by
+// the same check.
+func TestFreshLoopStillRuns(t *testing.T) {
+	f := &fakeWorker{statuses: []string{StatusDone}}
+	sum, err := newRun(t, f, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 1 || sum.Iterations != 1 {
+		t.Errorf("a fresh charter ran %d iterations, want 1", sum.Iterations)
+	}
+}

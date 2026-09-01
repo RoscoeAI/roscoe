@@ -137,6 +137,18 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 
 	sum := &Summary{Status: StatusContinuing}
 	seed, _ := Read(o.Dir)
+	// A charter that a previous run already finished should cost nothing to
+	// re-open. The supervisor is holding the file; dispatching a worker to be
+	// told what is on the line above is a whole iteration of spend.
+	if st := ParseStatus(seed); st != StatusContinuing {
+		sum.Status = st
+		sum.Action, sum.Reason = Done, "loop.md already reports done"
+		if st == StatusBlocked {
+			sum.Action, sum.Reason = Escalate, "loop.md already reports blocked"
+		}
+		o.note("loop.already_"+st, map[string]any{"task": o.TaskID, "dir": o.Dir})
+		return sum, nil
+	}
 	prompt := KernelPrompt(o.Charter, Projection(seed, 0))
 	resume := ""
 	consecutiveErrors := 0
