@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -145,13 +146,37 @@ func Load(path string) (*Config, error) {
 	dec.DisallowUnknownFields()
 	var c Config
 	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", path, explainDecode(err))
 	}
 	if errs := c.Validate(); len(errs) > 0 {
 		return nil, fmt.Errorf("validate %s: %w", path, errors.Join(errs...))
 	}
 	return &c, nil
 }
+
+// unknownFieldRE pulls the field name out of encoding/json's message, which
+// reads: json: unknown field "effort".
+var unknownFieldRE = regexp.MustCompile(`unknown field "([^"]+)"`)
+
+// explainDecode turns a strict-decoding failure into something a person can
+// act on. Rejecting unknown fields catches typos, which is worth keeping, but
+// it means a config written by a newer roscoe fails on an older one with a
+// message that points at the config when the problem is the binary. That is a
+// bad half-hour for whoever hits it.
+func explainDecode(err error) error {
+	m := unknownFieldRE.FindStringSubmatch(err.Error())
+	if m == nil {
+		return err
+	}
+	return fmt.Errorf("this config sets %q, which this roscoe does not know. "+
+		"It was probably written by a newer roscoe than the one you are running "+
+		"(%s). Update with: curl -fsSL https://roscoe.sh/install | sh. "+
+		"If you added it by hand, it is a typo: %w", m[1], Version, err)
+}
+
+// Version is the running binary's version, set from main so a config error can
+// say which roscoe rejected it. "dev" until a release stamps it.
+var Version = "dev"
 
 // Save writes the config atomically: marshal-indent to a temp file in the
 // destination directory, then rename over path. Mode 0644.

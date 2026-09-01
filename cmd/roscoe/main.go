@@ -38,6 +38,9 @@ func realMain() int {
 		}
 	}
 
+	// So a config error can name the roscoe that rejected it.
+	config.Version = Version
+
 	flag.Usage = usage
 	cfgPath := flag.String("config", "", "path to roscoe.json (default ./roscoe.json, fallback ~/.roscoe/roscoe.json)")
 	flag.Parse()

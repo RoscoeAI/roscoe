@@ -66,6 +66,9 @@
     },
     "middle": {
       "provider": "anthropic",
+      "harness": "claude",
+      "lean_context": true,
+      "cache_ttl": "1h",
       "effort": "ultracode",
       "orchestrate": false,
       "model": "sonnet",
