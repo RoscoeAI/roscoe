@@ -10,4 +10,8 @@ dist/
 ARCHITECTURE.md
 roscoe.json
 
+# working memory for `roscoe loop`: rewritten every iteration, so it is local
+# state rather than something to version. The durable record is the ledger.
+loop.md
+
 .DS_Store
