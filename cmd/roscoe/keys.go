@@ -106,14 +106,16 @@ func (k *keyReader) ReadLine(promptStr string) (string, bool) {
 func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string, comp *completer) (string, bool) {
 	var b []byte
 	hist := len(history) // index into history; len == "current, unsaved line"
-	redraw := func() { sc.SetPrompt(promptStr, string(b), comp.hintFor(string(b))) }
+	redraw := func() {
+		sc.SetPrompt(promptStr, string(b), comp.hintFor(string(b)), comp.noteFor(string(b)))
+	}
 	redraw()
 
 	for c := range k.events {
 		switch {
 		case c == '\r' || c == '\n':
 			line := string(b)
-			sc.SetPrompt(promptStr, "", "")
+			sc.SetPrompt(promptStr, "", "", "")
 			return line, true
 
 		case c == 0x7f || c == 0x08:
@@ -178,6 +180,12 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string, c
 // line editor only renders and applies them.
 type completer struct {
 	candidates func(input string) []string
+	// note returns one line of help for what is being typed, shown above the
+	// input box. Optional.
+	note func(input string) string
+	// descends reports that a candidate has a level below it, so completing
+	// onto it should open that level rather than end the token.
+	descends func(candidate string) bool
 }
 
 // suggestions returns the candidates for the current token, plus that token.
@@ -210,13 +218,28 @@ func (c *completer) hintFor(input string) string {
 		return ""
 	}
 	if len(cands) == 1 {
-		return strings.TrimPrefix(cands[0], token) + "  ⇥"
+		tail := "  ⇥"
+		if c.descends != nil && c.descends(cands[0]) {
+			tail = ".  ⇥"
+		}
+		return strings.TrimPrefix(cands[0], token) + tail
 	}
-	shown := cands
+	// Show candidates relative to the level being walked: under
+	// "tiers.middle." the choices read "model provider effort", not the
+	// whole dotted path repeated for each.
+	parent := ""
+	if i := strings.LastIndex(token, "."); i >= 0 {
+		parent = token[:i+1]
+	}
+	shown := make([]string, 0, len(cands))
+	for _, c := range cands {
+		shown = append(shown, strings.TrimPrefix(c, parent))
+	}
 	const max = 6
 	more := ""
 	if len(shown) > max {
-		shown, more = shown[:max], fmt.Sprintf(" +%d", len(cands)-max)
+		more = fmt.Sprintf(" +%d", len(shown)-max)
+		shown = shown[:max]
 	}
 	return "  " + strings.Join(shown, " ") + more
 }
@@ -238,9 +261,21 @@ func (c *completer) completeOn(input string) string {
 	base := strings.TrimSuffix(input, token)
 	out := base + replacement
 	if len(cands) == 1 {
-		out += " "
+		if c.descends != nil && c.descends(replacement) {
+			out += "." // open the next level instead of ending the token
+		} else {
+			out += " "
+		}
 	}
 	return out
+}
+
+// noteFor is the help line for the current input, or "".
+func (c *completer) noteFor(input string) string {
+	if c == nil || c.note == nil {
+		return ""
+	}
+	return c.note(input)
 }
 
 func commonPrefix(items []string) string {

@@ -33,7 +33,12 @@ curl -fsSL https://roscoe.sh/install | sh
   headless). Nothing about your daily driver changes.
 - **Tier 2, workers.** Spawn-per-task `claude -p` sessions: the full Claude
   Code harness (tools, subagents, Workflows), headless, one fresh git worktree
-  and isolated `CLAUDE_CONFIG_DIR` per task.
+  and isolated `CLAUDE_CONFIG_DIR` per task. Workers run at
+  `tiers.middle.effort: ultracode`, so each substantive task is planned as a
+  workflow and fanned out rather than ground through in one thread. That is
+  the whole economic argument: the planning happens on a top-tier model, the
+  work it hands out lands on tier 3. Dial it back with
+  `roscoe config set tiers.middle.effort high`.
 - **Tier 3, the swarm.** Native Claude Code subagents whose requests carry a
   virtual model name (`roscoe/tier3`). A ~400-line loopback reverse proxy
   dispatches each request by model name: `claude-*` passes through to Anthropic
@@ -57,6 +62,19 @@ Every config value is CLI-settable (`roscoe config set quorum.enabled true`);
 precedence is flag > `ROSCOE_*` env > `roscoe.json` > defaults. See
 [`roscoe.example.json`](roscoe.example.json) for the full shape and
 [`SPEC.md`](SPEC.md) for the package contracts.
+
+Nobody memorizes a config schema, so in `roscoe chat` the settings are
+something you walk rather than recall. `/config` lists the top-level keys with
+a line on what each one is; naming one goes a level deeper; tab completes and
+descends; and the line above the prompt describes whatever you are pointing at
+as you type.
+
+```
+/config                      accounts, providers, nodes, tiers, autonomy, …
+/config tiers                main, middle, subagents
+/config tiers.middle         every worker setting, with its current value
+/config tiers.middle.effort high
+```
 
 ## Text-message escalations
 

@@ -234,9 +234,9 @@ func TestSendRequestConstruction(t *testing.T) {
 		wantParams map[string]string // param -> value; "" means must be absent
 	}{
 		{
-			name: "messaging service wins over from",
-			tw:   twilio{sid: "AC123", token: "tok", msgService: "MG456", from: "+15559990000", to: "+15550001111"},
-			msg:  Message{Title: "Quorum", Body: "2 of 3 voted yes"},
+			name:     "messaging service wins over from",
+			tw:       twilio{sid: "AC123", token: "tok", msgService: "MG456", from: "+15559990000", to: "+15550001111"},
+			msg:      Message{Title: "Quorum", Body: "2 of 3 voted yes"},
 			wantBody: "Quorum\n2 of 3 voted yes",
 			wantParams: map[string]string{
 				"MessagingServiceSid": "MG456",
@@ -244,9 +244,9 @@ func TestSendRequestConstruction(t *testing.T) {
 			},
 		},
 		{
-			name: "bare from number when no messaging service",
-			tw:   twilio{sid: "AC123", token: "tok", from: "+15559990000", to: "+15550001111"},
-			msg:  Message{Title: "Done", Body: "task finished"},
+			name:     "bare from number when no messaging service",
+			tw:       twilio{sid: "AC123", token: "tok", from: "+15559990000", to: "+15550001111"},
+			msg:      Message{Title: "Done", Body: "task finished"},
 			wantBody: "Done\ntask finished",
 			wantParams: map[string]string{
 				"From":                "+15559990000",

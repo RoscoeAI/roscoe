@@ -35,6 +35,7 @@ type screen struct {
 	prompt string
 	input  string
 	hint   string // completion hint shown after the input
+	note   string // one-line help for what is being typed, shown above the box
 	active bool
 
 	lines  []string // display lines, pre-wrapped to the terminal width
@@ -64,8 +65,17 @@ func (s *screen) measure() {
 	}
 }
 
+// boxHeight is the bottom region the prompt owns: the box, plus a row for the
+// help note when there is one.
+func (s *screen) boxHeight() int {
+	if s.note != "" {
+		return boxRows + 1
+	}
+	return boxRows
+}
+
 func (s *screen) viewHeight() int {
-	if h := s.rows - boxRows; h > 0 {
+	if h := s.rows - s.boxHeight(); h > 0 {
 		return h
 	}
 	return 1
@@ -135,11 +145,18 @@ func (s *screen) Scroll(delta int) {
 	s.repaintLocked()
 }
 
-// SetPrompt updates the input line (and its completion hint) only.
-func (s *screen) SetPrompt(prompt, input, hint string) {
+// SetPrompt updates the input line, its completion hint, and the help note
+// above it. A note appearing or disappearing changes the viewport height, so
+// that case repaints everything rather than just the box.
+func (s *screen) SetPrompt(prompt, input, hint, note string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.prompt, s.input, s.hint = prompt, input, hint
+	resized := (s.note == "") != (note == "")
+	s.prompt, s.input, s.hint, s.note = prompt, input, hint, note
+	if resized {
+		s.repaintLocked()
+		return
+	}
 	s.drawBoxLocked()
 }
 
@@ -199,6 +216,14 @@ func (s *screen) drawBoxLocked() {
 	}
 	pad := rest - len([]rune(hint))
 
+	if s.note != "" {
+		note := s.note
+		if len([]rune(note)) > s.cols-2 {
+			note = string([]rune(note)[:s.cols-2])
+		}
+		fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s %s%s%s",
+			ansiHide, s.rows-3, ansiClrEOL, ansiDim, note, ansiReset)
+	}
 	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s╭%s╮%s",
 		ansiHide, s.rows-2, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
 	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s│%s %s%s%s%s%s%s%s│%s",

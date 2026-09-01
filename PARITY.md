@@ -1,11 +1,11 @@
 # Claude Code parity
 
-Where roscoe stands against the tool people already know, as of v0.8.0
-(2026-09-01). Parity is a means, not the goal: roscoe should feel familiar
+Where roscoe stands against the tool people already know, as of v0.10.0
+(2026-08-31). Parity is a means, not the goal: roscoe should feel familiar
 enough that nobody has to relearn the basics, then do things Claude Code
 does not.
 
-**Everyday loop: ~70%. Whole surface: ~40%.**
+**Everyday loop: ~72%. Whole surface: ~42%.**
 
 Roscoe starts with an unfair advantage: a worker *is* Claude Code
 (`claude -p`), so every tool, permission mode, hook, skill, and CLAUDE.md
@@ -18,13 +18,15 @@ conversation, the controls, the session handling.
 |---|---|---|---|
 | Conversation with memory | yes | **yes** | `roscoe chat`, one session per chat |
 | Pinned input box | yes | **yes** | bordered, bottom-anchored, resize-aware |
+| Prompt history | yes | **yes** | up and down walk previous prompts once the line is empty |
+| Scrollback | yes | **yes** | arrows and page up/down move the viewport over the whole conversation |
 | Live output while working | yes | **partial** | one line per event; no token-by-token streaming |
 | Interrupt mid-turn | Esc | **Esc** | stops at a clean point, then you redirect |
 | Resume a session | `--resume` | **yes, better** | trims oversized transcripts so long chats reload at all |
 | Replay history on resume | yes | **yes** | last exchanges reprinted above the prompt |
 | Tools (read/edit/bash/search) | yes | **yes** | inherited; the worker is Claude Code |
 | Subagents | yes | **yes, cheaper** | routed to GLM-5.3-Flash, 8 wide by default |
-| Slash settings | yes | **partial** | `/model /harness /autonomy /subagents /config /cost /session /new /exit` |
+| Slash settings | yes | **yes, deeper** | `/model /harness /autonomy /subagents /config /cost /session /new /exit`; `/config` walks the whole schema a level at a time, describing each setting as you type |
 | Cost visibility | yes | **yes** | per turn and running total |
 | Your auth and billing | yes | **yes** | runs under your own login |
 | Web search and fetch | yes | **yes** | in the default allowed tools |
@@ -35,8 +37,7 @@ The gaps you feel within a minute of typing:
 
 | | Status | Why it matters |
 |---|---|---|
-| Line editing (arrows, word jump) | **no** | backspace only; arrows are ignored rather than fatal (v0.8.0) |
-| Prompt history (up arrow) | **no** | retyping a long prompt is the most common annoyance |
+| Line editing (left/right, word jump) | **no** | backspace only; left and right are swallowed rather than fatal |
 | Multi-line input | **no** | enter sends; no shift-enter or paste-safe entry |
 | Permission prompts | **no** | workers run pre-approved; there is no "allow this once?" |
 | Session picker | **no** | you need the session id; no `roscoe sessions` |
@@ -62,13 +63,16 @@ Deviation is the point in these:
 - **Memory that compounds.** A Graphify knowledge graph under `~/.roscoe`.
   Planned.
 - **Either harness.** Claude Code or Codex workers behind one interface.
+- **Workers that orchestrate.** Every worker runs at `ultracode` effort, so a
+  substantive task is planned as a workflow and fanned out to the cheap tier
+  instead of ground through in one expensive thread.
 - **A ledger of everything.** Every event of every task in
   `~/.roscoe/runs/<id>/events.jsonl`, greppable and tailable.
 
 ## What to build next for parity that is felt
 
-1. **Line editing and prompt history.** Cheap, and the first thing anyone
-   notices.
+1. **Line editing.** Left and right within the line, word jump, home and
+   end. Prompt history landed; moving the cursor did not.
 2. **Multi-line input.** Paste a stack trace without sending it early.
 3. **Session picker** (`roscoe sessions`, `chat --last`).
 4. **Streaming assistant text**, so a long answer is not a silent wait.

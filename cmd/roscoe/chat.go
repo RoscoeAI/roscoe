@@ -98,33 +98,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 
 	// Completion knowledge lives here: command names, then per-command
 	// arguments (config paths come from the config schema itself).
-	commands := []string{"/autonomy", "/config", "/cost", "/exit", "/harness", "/help", "/model", "/new", "/session", "/subagents"}
-	comp := &completer{candidates: func(input string) []string {
-		fields := strings.Fields(input)
-		token := currentToken(input)
-		if !strings.HasPrefix(strings.TrimSpace(input), "/") {
-			return nil
-		}
-		if len(fields) <= 1 && token != "" { // still naming the command
-			return matching(commands, token)
-		}
-		if len(fields) == 0 {
-			return commands
-		}
-		switch fields[0] {
-		case "/config":
-			return matching(cfg.Paths(), token)
-		case "/harness":
-			return matching([]string{"claude", "codex"}, token)
-		case "/model":
-			return matching(modelChoices(cfg), token)
-		case "/autonomy":
-			return matching([]string{"0", "25", "50", "75", "90", "100"}, token)
-		case "/subagents":
-			return matching([]string{"1", "2", "4", "8", "12", "16", "24"}, token)
-		}
-		return nil
-	}}
+	comp := newChatCompleter(cfg)
 
 	keys, restore, err := newKeyReader()
 	if err != nil {
@@ -255,12 +229,20 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case strings.HasPrefix(msg, "/config"):
 			parts := strings.Fields(strings.TrimPrefix(msg, "/config"))
 			if len(parts) == 0 {
-				sc.Print(ansiDim + "usage: /config <dotted.path> [value]" + ansiReset)
+				printConfigLevel(sc, cfg, "")
 				continue
 			}
 			if len(parts) == 1 {
+				// A branch lists what is under it; only a leaf has a value.
+				if kids := cfg.ChildPaths(parts[0]); len(kids) > 0 {
+					printConfigLevel(sc, cfg, parts[0])
+					continue
+				}
 				if v, gErr := cfg.Get(parts[0]); gErr == nil {
 					sc.Printf("%s%s = %v%s", ansiDim, parts[0], v, ansiReset)
+					if d := config.Describe(parts[0]); d != "" {
+						sc.Printf("%s%s%s", ansiFaint, d, ansiReset)
+					}
 				} else {
 					sc.Printf("%s%v%s", ansiDim, gErr, ansiReset)
 				}
@@ -381,6 +363,143 @@ func persist(sc *screen, explicit, path, value string) {
 }
 
 // matching returns the candidates carrying prefix, in order.
+// commandHelp is the one-line description shown above the input box while a
+// slash command is being typed.
+var commandHelp = map[string]string{
+	"/autonomy":  "0-100; how much roscoe decides without asking you",
+	"/config":    "read or set any setting by path; tab walks down a level",
+	"/cost":      "what this chat has spent so far",
+	"/exit":      "leave the chat; the session keeps its id",
+	"/harness":   "which CLI the workers run: claude or codex",
+	"/help":      "the commands, with what each one does",
+	"/model":     "the model your workers run",
+	"/new":       "start a fresh session, leaving this one on disk",
+	"/session":   "the current session id, for resuming later",
+	"/subagents": "how many cheap subagents a worker may run at once",
+}
+
+// parentPath is the dotted path one level up: "tiers.middle.effort" ->
+// "tiers.middle", "tiers" -> "".
+func parentPath(path string) string {
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		return path[:i]
+	}
+	return ""
+}
+
+func newChatCompleter(cfg *config.Config) *completer {
+	return &completer{
+		candidates: func(input string) []string {
+			fields := strings.Fields(input)
+			token := currentToken(input)
+			if !strings.HasPrefix(strings.TrimSpace(input), "/") {
+				return nil
+			}
+			if len(fields) <= 1 && token != "" { // still naming the command
+				return matching(commands, token)
+			}
+			if len(fields) == 0 {
+				return commands
+			}
+			switch fields[0] {
+			case "/config":
+				// One level at a time: top-level keys first, then the
+				// children of whatever has been typed. Dumping every leaf
+				// path teaches nobody what the settings are.
+				if len(fields) > 2 || (len(fields) == 2 && token == "") {
+					return nil // past the path; typing the value
+				}
+				return matching(cfg.ChildPaths(parentPath(token)), token)
+			case "/harness":
+				return matching([]string{"claude", "codex"}, token)
+			case "/model":
+				return matching(modelChoices(cfg), token)
+			case "/autonomy":
+				return matching([]string{"0", "25", "50", "75", "90", "100"}, token)
+			case "/subagents":
+				return matching([]string{"1", "2", "4", "8", "12", "16", "24"}, token)
+			}
+			return nil
+		},
+		descends: func(candidate string) bool {
+			return len(cfg.ChildPaths(candidate)) > 0
+		},
+		note: func(input string) string {
+			fields := strings.Fields(input)
+			if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+				return ""
+			}
+			cmd := fields[0]
+			if len(fields) == 1 && !strings.HasSuffix(input, " ") {
+				if d := commandHelp[cmd]; d != "" {
+					return cmd + ": " + d
+				}
+				if m := matching(commands, cmd); len(m) == 1 {
+					return m[0] + ": " + commandHelp[m[0]]
+				}
+				return ""
+			}
+			if cmd == "/config" && len(fields) >= 2 {
+				path := fields[1]
+				if d := config.Describe(path); d != "" {
+					return strings.TrimSuffix(path, ".") + ": " + d
+				}
+				// Partway through a name: describe it once it is unambiguous.
+				if m := matching(cfg.ChildPaths(parentPath(path)), path); len(m) == 1 {
+					if d := config.Describe(m[0]); d != "" {
+						return m[0] + ": " + d
+					}
+				}
+				return ""
+			}
+			if d := commandHelp[cmd]; d != "" {
+				return cmd + ": " + d
+			}
+			return ""
+		},
+	}
+}
+
+// printConfigLevel lists one level of the config: the children of prefix
+// (top-level keys when it is empty), each with its description and, for
+// leaves, its current value.
+func printConfigLevel(sc *screen, cfg *config.Config, prefix string) {
+	kids := cfg.ChildPaths(prefix)
+	if len(kids) == 0 {
+		sc.Printf("%sno settings under %s%s", ansiDim, prefix, ansiReset)
+		return
+	}
+	if d := config.Describe(prefix); d != "" {
+		sc.Printf("%s%s%s", ansiFaint, d, ansiReset)
+	}
+	width := 0
+	for _, k := range kids {
+		if n := len(strings.TrimPrefix(k, prefix+".")); n > width {
+			width = n
+		}
+	}
+	for _, k := range kids {
+		name := strings.TrimPrefix(k, prefix+".")
+		detail := config.Describe(k)
+		if len(cfg.ChildPaths(k)) == 0 {
+			if v, err := cfg.Get(k); err == nil {
+				detail = fmt.Sprintf("%v", v)
+				if d := config.Describe(k); d != "" {
+					detail = fmt.Sprintf("%v  %s%s", v, ansiFaint, d)
+				}
+			}
+		}
+		sc.Printf("  %s%-*s%s  %s%s", ansiGreen, width, name, ansiReset, ansiDim+detail, ansiReset)
+	}
+	if prefix == "" {
+		sc.Printf("%s/config <key> to go deeper, /config <path> <value> to set%s", ansiFaint, ansiReset)
+	}
+}
+
+// commands are the slash commands offered in chat, in the order they
+// complete.
+var commands = []string{"/autonomy", "/config", "/cost", "/exit", "/harness", "/help", "/model", "/new", "/session", "/subagents"}
+
 func matching(candidates []string, prefix string) []string {
 	if prefix == "" {
 		return candidates

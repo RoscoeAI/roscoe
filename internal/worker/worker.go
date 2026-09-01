@@ -49,6 +49,15 @@ type Opts struct {
 	OnEvent    func(*streamjson.Event)
 }
 
+// orchestrationPrompt is appended to a worker's system prompt when
+// tiers.middle.orchestrate is set and effort is not "ultracode" (which asks
+// claude for the same fan-out natively). Workflow subagents inherit
+// CLAUDE_CODE_SUBAGENT_MODEL, so the fan-out runs on the tier-3 provider.
+const orchestrationPrompt = "For any substantive task, decompose the work and run it as a Workflow: " +
+	"fan out independent parts to parallel subagents, verify findings adversarially, and synthesize. " +
+	"Subagents here run on a cheap model, so prefer many narrow subagents over doing everything yourself. " +
+	"Solo work is for trivial or conversational turns."
+
 // killGrace is how long a SIGINT'd claude gets to shut down before SIGKILL.
 const killGrace = 10 * time.Second
 
@@ -165,6 +174,15 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			"--agents", agentsJSON,
 			"--max-budget-usd", strconv.FormatFloat(mid.MaxBudgetUSDPerTask, 'f', -1, 64),
 			"--model", mid.Model,
+		}
+		if mid.Effort != "" {
+			args = append(args, "--effort", mid.Effort)
+		}
+		if mid.Orchestrate && mid.Effort != "ultracode" {
+			// effort=ultracode already plans a workflow per task. Below that,
+			// ask for the fan-out in words; either way it lands on the cheap
+			// tier-3 models through the router.
+			args = append(args, "--append-system-prompt", orchestrationPrompt)
 		}
 		if t.Resume != "" {
 			args = append(args, "--resume", t.Resume)

@@ -100,7 +100,18 @@ type MiddleTier struct {
 	// swarms via the router) or "codex" (single-agent workers via
 	// `codex exec`; codex owns its own auth/model config, and tier-3
 	// swarms/resume don't apply).
-	Harness             string   `json:"harness,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	// Effort is claude's reasoning effort for workers: low, medium, high,
+	// xhigh, max, or ultracode. Empty leaves claude's default. "ultracode"
+	// is xhigh reasoning plus a workflow planned for each substantive task,
+	// which is roscoe's shape exactly: the worker plans, and the fan-out
+	// lands on the cheap tier-3 swarm through the router.
+	Effort string `json:"effort,omitempty"`
+	// Orchestrate nudges each worker to fan out with the Workflow tool
+	// instead of doing everything in one thread. Redundant under
+	// effort "ultracode" (and skipped there); use it to get the same fan-out
+	// at a lower effort level.
+	Orchestrate         bool     `json:"orchestrate,omitempty"`
 	Provider            string   `json:"provider"`
 	Model               string   `json:"model"`
 	Accounts            []string `json:"accounts"`

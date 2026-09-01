@@ -63,6 +63,7 @@ func Default() *Config {
 				Account:  "primary",
 			},
 			Middle: MiddleTier{
+				Effort:              "ultracode",
 				Provider:            "anthropic",
 				Model:               "sonnet",
 				Accounts:            []string{"primary", "secondary"},
@@ -113,6 +114,19 @@ func Default() *Config {
 		},
 	}
 }
+
+// effortLevels are the values claude accepts for --effort. "ultracode" is
+// absent from claude's own --help but accepted (an unknown value warns; this
+// one does not), and adds workflow planning on top of xhigh reasoning.
+var effortLevels = []string{"low", "medium", "high", "xhigh", "max", "ultracode"}
+
+var validEffort = func() map[string]bool {
+	m := make(map[string]bool, len(effortLevels))
+	for _, e := range effortLevels {
+		m[e] = true
+	}
+	return m
+}()
 
 // Load reads path with a strict decoder (unknown fields rejected), then
 // validates. All validation errors are joined into the returned error.
@@ -201,6 +215,11 @@ func (c *Config) Validate() []error {
 	provider("tiers.main.provider", c.Tiers.Main.Provider)
 	if c.Tiers.Main.Account != "" {
 		account("tiers.main.account", c.Tiers.Main.Account)
+	}
+	if e := c.Tiers.Middle.Effort; e != "" && !validEffort[e] {
+		// claude only warns and falls back to its default, which silently
+		// costs you the reasoning you asked for; fail here instead.
+		errs = append(errs, fmt.Errorf("tiers.middle.effort %q is not one of %s", e, strings.Join(effortLevels, ", ")))
 	}
 	provider("tiers.middle.provider", c.Tiers.Middle.Provider)
 	for i, a := range c.Tiers.Middle.Accounts {
@@ -426,6 +445,183 @@ func (c *Config) Paths() []string {
 		}
 	}
 	walk("", tree)
+	sort.Strings(out)
+	return out
+}
+
+// docs maps config paths to one-line descriptions. Array indices and map keys
+// match "*", so providers.deepinfra.base_url finds providers.*.base_url.
+var docs = map[string]string{
+	"version":                                   "config schema version",
+	"project":                                   "name shown in fleet output",
+	"state_dir":                                 "where roscoe keeps runs, workers, and credentials",
+	"env_file":                                  "file holding secrets (API keys, Twilio); never the config itself",
+	"accounts":                                  "Claude credentials the fleet may use",
+	"accounts.*":                                "one credential: name, kind, and where the token lives",
+	"accounts.*.name":                           "how tiers refer to this account",
+	"accounts.*.kind":                           "claude-subscription or anthropic-api-key",
+	"accounts.*.token_ref":                      "where the token lives: keychain:<service> or env:<VAR>",
+	"accounts.*.enabled":                        "false parks an account without deleting it",
+	"accounts.*.minted_at":                      "when a setup-token was created; they expire at 12 months",
+	"providers":                                 "model endpoints the router can reach",
+	"providers.*":                               "one endpoint: protocol, base URL, and how to authenticate",
+	"providers.*.protocol":                      "wire protocol; anthropic today",
+	"providers.*.base_url":                      "where requests go",
+	"providers.*.auth":                          "account (pass the worker's own headers), env:<VAR>, or static:<value>",
+	"providers.*.count_tokens":                  "estimate answers count_tokens locally instead of upstream",
+	"providers.*.pricing_per_mtok":              "dollars per million tokens, for the ledger",
+	"providers.*.serve":                         "how a local engine serves this model",
+	"nodes":                                     "machines that can run workers",
+	"nodes.*":                                   "one machine: ssh alias, worker slots, enabled",
+	"nodes.*.ssh":                               "ssh alias; empty means this machine",
+	"nodes.*.workers":                           "how many workers this machine may run",
+	"tiers":                                     "the three tiers: your session, the workers, the swarm",
+	"tiers.main":                                "the session you talk to",
+	"tiers.middle":                              "the headless workers that do the work",
+	"tiers.middle.harness":                      "claude or codex",
+	"tiers.middle.effort":                       "reasoning effort: low, medium, high, xhigh, max",
+	"tiers.middle.orchestrate":                  "tell workers to fan out with workflows instead of working alone",
+	"tiers.middle.provider":                     "which provider serves the worker model",
+	"tiers.middle.model":                        "the worker model",
+	"tiers.middle.accounts":                     "accounts workers may draw from",
+	"tiers.middle.permission_mode":              "how much a worker may do unattended",
+	"tiers.middle.allowed_tools":                "tools workers may use",
+	"tiers.middle.max_budget_usd_per_task":      "spend ceiling for one task",
+	"tiers.middle.api_timeout_ms":               "how long a worker waits on the API",
+	"tiers.subagents":                           "the cheap swarm each worker fans out to",
+	"tiers.subagents.provider":                  "who serves the swarm; DeepInfra by default",
+	"tiers.subagents.model":                     "the swarm model",
+	"tiers.subagents.virtual_model":             "name subagent requests carry; the router rewrites it",
+	"tiers.subagents.map_haiku_alias":           "send haiku-alias traffic to the swarm too",
+	"tiers.subagents.max_concurrent":            "how many subagents one worker may run at once",
+	"tiers.subagents.max_depth":                 "how deep subagents may spawn subagents",
+	"tiers.subagents.agents":                    "named subagents workers can call",
+	"autonomy":                                  "how much roscoe decides without you",
+	"autonomy.level":                            "0-100; at 100 only exhausted credits interrupt you",
+	"memory":                                    "the knowledge graph the fleet learns into",
+	"memory.engine":                             "graphify",
+	"memory.path":                               "where the graph lives",
+	"quorum":                                    "the models that answer questions in your place",
+	"quorum.voters":                             "who votes",
+	"quorum.decide":                             "how votes resolve; majority",
+	"quorum.min_confidence":                     "below this, escalate instead of deciding",
+	"quorum.auto_answer":                        "question kinds the quorum may answer",
+	"quorum.always_escalate":                    "kinds that always reach you, whatever the dial says",
+	"quorum.notify":                             "how escalations reach you",
+	"quorum.notify.channel":                     "twilio-sms or roscoe-relay",
+	"router":                                    "the loopback proxy that splits traffic by model name",
+	"router.port":                               "port it listens on; busy falls back to ephemeral",
+	"router.default_route":                      "tier whose provider serves unmatched models",
+	"limits":                                    "fleet-wide ceilings",
+	"limits.max_parallel_tasks":                 "tasks running at once",
+	"limits.per_account_max_concurrent":         "workers per account, to stay under rate limits",
+	"limits.run_budget_usd":                     "spend ceiling for a run",
+	"reporting":                                 "where the ledger and work products go",
+	"reporting.ledger":                          "append-only event log per run",
+	"reporting.artifacts":                       "how work comes back; a git branch per task",
+	"reporting.git_remote":                      "where task branches are pushed; blank keeps them local",
+	"providers.*.pricing_per_mtok.input":        "dollars per million input tokens",
+	"providers.*.pricing_per_mtok.output":       "dollars per million output tokens",
+	"providers.*.pricing_per_mtok.cached_input": "dollars per million cached input tokens",
+	"providers.*.serve.engine":                  "the local server: ollama, vllm, mlx",
+	"providers.*.serve.model":                   "the model tag that engine loads",
+	"providers.*.serve.note":                    "a reminder to yourself; roscoe ignores it",
+	"nodes.*.name":                              "how you refer to this machine",
+	"nodes.*.enabled":                           "false parks a machine without removing it",
+	"memory.enabled":                            "whether runs feed the graph",
+	"quorum.enabled":                            "whether a quorum answers in your place at all",
+	"quorum.voters.*":                           "one voter: provider, model, and account",
+	"quorum.voters.*.provider":                  "who serves this voter",
+	"quorum.voters.*.model":                     "the voting model",
+	"quorum.voters.*.account":                   "which account pays for it; blank uses the default",
+	"quorum.notify.on":                          "the events worth a message",
+	"router.bind":                               "interface it binds; loopback",
+	"tiers.main.kind":                           "how the top tier runs: interactive or headless",
+	"tiers.main.provider":                       "who serves your own session",
+	"tiers.main.model":                          "the model you talk to",
+	"tiers.main.account":                        "which account your session runs under",
+	"tiers.middle.session":                      "per-task; each task gets a fresh worker",
+	"tiers.subagents.agents.*":                  "one named subagent: what it is for and what it may use",
+	"tiers.subagents.agents.*.description":      "when a worker should reach for this subagent",
+	"tiers.subagents.agents.*.prompt":           "its system prompt; defaults to the description",
+	"tiers.subagents.agents.*.tools":            "tools this subagent may use",
+}
+
+// Describe returns a one-line description of a config path, or "".
+func Describe(path string) string {
+	// Mid-walk ("tiers.") the branch itself is what needs describing.
+	path = strings.TrimSuffix(path, ".")
+	if path == "" {
+		return "everything roscoe knows: accounts, providers, nodes, tiers, limits"
+	}
+	if d, ok := docs[path]; ok {
+		return d
+	}
+	segs := strings.Split(path, ".")
+	// A list item takes its list's description: allowed_tools.3 is one of
+	// "tools workers may use".
+	if len(segs) > 1 {
+		if _, err := strconv.Atoi(segs[len(segs)-1]); err == nil {
+			if d := Describe(strings.Join(segs[:len(segs)-1], ".")); d != "" {
+				return d
+			}
+		}
+	}
+	// Try wildcard forms, replacing segments right to left.
+	for i := len(segs) - 1; i >= 0; i-- {
+		probe := append([]string(nil), segs...)
+		probe[i] = "*"
+		if d, ok := docs[strings.Join(probe, ".")]; ok {
+			return d
+		}
+		for j := i + 1; j < len(segs); j++ {
+			probe2 := append([]string(nil), probe...)
+			probe2[j] = "*"
+			if d, ok := docs[strings.Join(probe2, ".")]; ok {
+				return d
+			}
+		}
+	}
+	return ""
+}
+
+// ChildPaths returns the next level of paths under prefix: the top-level keys
+// when prefix is empty, otherwise prefix's immediate children. This keeps
+// completion a walk rather than a dump of every leaf.
+func (c *Config) ChildPaths(prefix string) []string {
+	// Union what the file holds with what the schema documents, so a setting
+	// that is simply unset (an omitempty field) is still discoverable.
+	all := c.Paths()
+	have := make(map[string]bool, len(all))
+	for _, p := range all {
+		have[p] = true
+	}
+	for p := range docs {
+		if !strings.Contains(p, "*") && !have[p] {
+			all = append(all, p)
+			have[p] = true
+		}
+	}
+	depth := 1
+	if prefix != "" {
+		depth = strings.Count(prefix, ".") + 2
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range all {
+		if prefix != "" && !strings.HasPrefix(p, prefix+".") && p != prefix {
+			continue
+		}
+		segs := strings.Split(p, ".")
+		if len(segs) < depth {
+			continue
+		}
+		candidate := strings.Join(segs[:depth], ".")
+		if !seen[candidate] {
+			seen[candidate] = true
+			out = append(out, candidate)
+		}
+	}
 	sort.Strings(out)
 	return out
 }
