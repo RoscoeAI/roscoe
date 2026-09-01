@@ -130,6 +130,11 @@ sit.
 `loop.md` is the working memory: the charter, the plan, what has been tried,
 and durable notes. Each iteration reads it and rewrites it, and sets a status
 of `continuing`, `done`, or `blocked`. `done` ends the run, `blocked` escalates.
+What has been tried and learned only ever accumulates: the supervisor snapshots
+the file before each iteration and puts back anything the worker dropped, so a
+careless rewrite cannot erase a dead end and send the next iteration walking
+back into it. That is enforced in code rather than asked for in the prompt,
+because a prompt is a contract a model can always break.
 The iteration ceiling and the budget are the loop's to enforce, not the
 worker's, so no judgment call can spend past them. Esc stops after the current
 iteration so the worker still writes its memory rather than being cut off.

@@ -137,6 +137,10 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		}
 
 		started := time.Now()
+		// Snapshot before dispatch: the worker rewrites the whole file, and
+		// this is what makes losing an entry impossible rather than merely
+		// discouraged.
+		before, _ := Read(o.Dir)
 		res, session, err := o.Dispatch(ctx, Iteration{N: n, Charter: o.Charter}, prompt, resume)
 		if session != "" {
 			resume, sum.Session = session, session
@@ -149,6 +153,19 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		md, readErr := Read(o.Dir)
 		if readErr != nil && err == nil {
 			err = readErr
+		}
+		if merged, restored := MergePreserving(before, md); len(restored) > 0 {
+			if werr := Write(o.Dir, merged); werr != nil {
+				o.note("loop.memory_restore_failed", map[string]any{
+					"task": o.TaskID, "iteration": n, "error": werr.Error(),
+				})
+			} else {
+				md = merged
+				o.note("loop.memory_restored", map[string]any{
+					"task": o.TaskID, "iteration": n, "entries": len(restored),
+					"first": firstLine(restored[0]),
+				})
+			}
 		}
 		// A turn the harness itself marked failed (its own budget cap, an API
 		// error it swallowed) is an error for the loop's purposes too.
