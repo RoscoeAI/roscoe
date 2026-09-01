@@ -13,6 +13,7 @@ import (
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/loop"
+	"roscoe.sh/roscoe/internal/quorum"
 	"roscoe.sh/roscoe/internal/router"
 	"roscoe.sh/roscoe/internal/streamjson"
 	"roscoe.sh/roscoe/internal/worker"
@@ -29,6 +30,7 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 	maxIter := fl.Int("max-iterations", loop.DefaultMaxIterations, "stop after this many iterations; -1 for no ceiling")
 	budget := fl.Float64("budget", 0, "stop once the run has spent this many dollars (0: no ceiling)")
 	once := fl.Bool("once", false, "run a single iteration and stop, whatever the status says")
+	noQuorum := fl.Bool("no-quorum", false, "judge with the worker's own status line instead of the model quorum")
 	_ = fl.Parse(args)
 
 	rest := fl.Args()
@@ -132,9 +134,45 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 		return res, session, err
 	}
 
+	// The quorum replaces the worker grading its own work. Without voters
+	// configured there is nothing to ask, so fall back rather than fail.
 	judge := loop.Judge(loop.StatusJudge{})
-	if *once {
+	switch {
+	case *once:
 		judge = loop.FixedJudge{D: loop.Decision{Action: loop.Done, Reason: "--once"}}
+	case *noQuorum || !cfg.Quorum.Enabled || len(cfg.Quorum.Voters) == 0:
+		fmt.Fprintln(os.Stderr, "[judge] the worker's own status line (no quorum)")
+	default:
+		q := quorum.New(cfg, env)
+		q.OnVerdicts = func(it loop.Iteration, vs []quorum.Verdict, d loop.Decision) {
+			for _, v := range vs {
+				if v.Err != nil {
+					fmt.Fprintf(os.Stderr, "  [vote] %s: unavailable (%v)\n", v.Voter, v.Err)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "  [vote] %s: %s %.2f · %s\n", v.Voter, v.Action, v.Confidence, v.Reason)
+			}
+			if led != nil {
+				ballots := make([]map[string]any, 0, len(vs))
+				for _, v := range vs {
+					b := map[string]any{"voter": v.Voter, "action": string(v.Action), "confidence": v.Confidence, "reason": v.Reason}
+					if len(v.Kinds) > 0 {
+						b["kinds"] = v.Kinds
+					}
+					if v.Err != nil {
+						b["error"] = v.Err.Error()
+					}
+					ballots = append(ballots, b)
+				}
+				_ = led.Note("quorum.vote", map[string]any{
+					"task": *taskID, "iteration": it.N, "ballots": ballots,
+					"action": string(d.Action), "reason": d.Reason, "confidence": d.Confidence,
+				})
+			}
+		}
+		judge = q
+		fmt.Fprintf(os.Stderr, "[judge] quorum of %d · %s · min confidence %.2f · autonomy %d\n",
+			len(cfg.Quorum.Voters), cfg.Quorum.Decide, cfg.Quorum.MinConfidence, cfg.Autonomy.Level)
 	}
 
 	sum, err := loop.Run(loopCtx, loop.Options{

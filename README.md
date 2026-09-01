@@ -134,10 +134,15 @@ The iteration ceiling and the budget are the loop's to enforce, not the
 worker's, so no judgment call can spend past them. Esc stops after the current
 iteration so the worker still writes its memory rather than being cut off.
 
-Today the judge takes the worker at its word. The quorum replaces it: several
-models read the result and the file and decide done, retry, follow up, or
-escalate, with `autonomy.level` setting how much they absorb before you get a
-text.
+The judge is a quorum, not the worker's own opinion of its work. Several models
+read the result and the working memory and vote done, continue, or escalate;
+majority rules, and a split or a low-confidence verdict escalates rather than
+being resolved by one model. `autonomy.level` sets how much they absorb: at 100
+an unresolvable vote becomes more work rather than a question for you. The one
+thing the dial does not override is `quorum.always_escalate`, because a list of
+things nobody wants decided unattended is worth least at the exact moment the
+dial is highest. Run with `--no-quorum` to fall back to the worker's status
+line.
 
 ## Text-message escalations
 
@@ -165,8 +170,7 @@ workers with full subagent swarms, or Codex workers via `--harness codex` /
 `upgrade` + `relay` (hosted SMS), `version`. Codex workers are single-agent
 for now: the tier-3 swarm and `--resume` are Claude Code features. In
 flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
-(`accounts`), the quorum judging each loop iteration with the autonomy dial
-enforced, Graphify-backed
+(`accounts`), Graphify-backed
 memory, MCP dispatch into your interactive session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).
 
