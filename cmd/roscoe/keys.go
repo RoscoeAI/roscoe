@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // keyReader gives roscoe run its interactive controls: Esc interrupts the
@@ -112,7 +113,14 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr string) (string, bool) {
 			if len(b) > 0 {
 				b = b[:len(b)-1]
 			}
-		case c == 0x1b || c == 0x03:
+		case c == 0x1b:
+			// Arrow keys and friends arrive as ESC [ … ; only a bare Esc means
+			// "abandon this line".
+			if k.consumeEscapeSequence() {
+				continue
+			}
+			return "", false
+		case c == 0x03:
 			return "", false
 		case c >= 0x20 && c < 0x7f:
 			b = append(b, c)
@@ -122,4 +130,34 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr string) (string, bool) {
 		sc.SetPrompt(promptStr, string(b))
 	}
 	return "", false
+}
+
+// consumeEscapeSequence reports whether the Esc just read began a terminal
+// escape sequence (arrow keys, home/end, mouse), swallowing the rest of it.
+// A bare Esc — nothing following within a beat — returns false.
+func (k *keyReader) consumeEscapeSequence() bool {
+	select {
+	case c, ok := <-k.events:
+		if !ok {
+			return false
+		}
+		if c != '[' && c != 'O' {
+			return false
+		}
+		for {
+			select {
+			case f, ok := <-k.events:
+				if !ok {
+					return true
+				}
+				if f >= 0x40 && f <= 0x7e { // final byte of a CSI sequence
+					return true
+				}
+			case <-time.After(50 * time.Millisecond):
+				return true
+			}
+		}
+	case <-time.After(50 * time.Millisecond):
+		return false
+	}
 }

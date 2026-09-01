@@ -65,8 +65,10 @@ func (s *screen) Enter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = true
-	// Scroll region = everything above the input box; park the cursor there.
-	fmt.Fprintf(os.Stdout, "\x1b[1;%dr\x1b[%d;1H", s.rows-boxRows, s.rows-boxRows)
+	// Scroll region = everything above the input box. Output starts at the
+	// top and grows down, scrolling only once it reaches the bottom, so a
+	// short conversation is not stranded at the foot of the screen.
+	fmt.Fprintf(os.Stdout, "\x1b[1;%dr\x1b[1;1H\x1b7", s.rows-boxRows)
 }
 
 // Leave restores the full-screen scroll region.
@@ -91,9 +93,9 @@ func (s *screen) Print(line string) {
 		fmt.Fprintln(os.Stdout, line)
 		return
 	}
-	// Park at the last scrolling row, emit the line (which scrolls the region),
-	// then repaint the pinned prompt.
-	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s\n", ansiHide, s.rows-boxRows, ansiClrEOL+line)
+	// Restore the output cursor, emit the line where it left off, save the new
+	// position, then repaint the pinned prompt.
+	fmt.Fprintf(os.Stdout, "%s\x1b8%s\n\x1b7", ansiHide, ansiClrEOL+line)
 	s.drawPromptLocked()
 }
 
@@ -151,7 +153,9 @@ func (s *screen) Resize() {
 	s.mu.Unlock()
 	s.measure()
 	if wasActive {
-		s.Enter()
+		s.mu.Lock()
+		fmt.Fprintf(os.Stdout, "\x1b[1;%dr", s.rows-boxRows)
+		s.mu.Unlock()
 		s.SetPrompt(s.prompt, s.input)
 	}
 }

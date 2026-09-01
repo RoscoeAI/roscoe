@@ -92,6 +92,8 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	}
 
 	account, token := resolveMiddleAccount(cfg, env)
+	var spent float64
+	var turns int
 
 	keys, restore, err := newKeyReader()
 	if err != nil {
@@ -163,7 +165,79 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			sc.Print(ansiDim + "started a fresh session" + ansiReset)
 			continue
 		case msg == "/help":
-			sc.Print(ansiDim + "/autonomy [0-100]  /session  /new  /exit · esc interrupts a turn" + ansiReset)
+			for _, l := range []string{
+				"/model <name>        middle-tier model for this fleet",
+				"/harness claude|codex worker harness",
+				"/autonomy 0-100      how much the quorum absorbs before texting you",
+				"/subagents <n>       how many subagents each worker may run",
+				"/config <path> [v]   read or set any roscoe.json value",
+				"/cost                what this chat has spent",
+				"/session             session id, to resume later",
+				"/new                 start a fresh session",
+				"/exit                leave (esc interrupts a running turn)",
+			} {
+				sc.Print(ansiDim + l + ansiReset)
+			}
+			continue
+		case msg == "/cost":
+			sc.Printf("%s%.4f USD across %d turns%s", ansiDim, spent, turns, ansiReset)
+			continue
+		case strings.HasPrefix(msg, "/model"):
+			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/model"))
+			if arg == "" {
+				sc.Printf("%smodel %s%s", ansiDim, cfg.Tiers.Middle.Model, ansiReset)
+				continue
+			}
+			cfg.Tiers.Middle.Model = arg
+			persist(sc, explicit, "tiers.middle.model", arg)
+			continue
+		case strings.HasPrefix(msg, "/harness"):
+			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/harness"))
+			if arg == "" {
+				sc.Printf("%sharness %s%s", ansiDim, harnessLabel, ansiReset)
+				continue
+			}
+			if arg != "claude" && arg != "codex" {
+				sc.Print(ansiDim + "usage: /harness claude|codex" + ansiReset)
+				continue
+			}
+			cfg.Tiers.Middle.Harness, harnessLabel = arg, arg
+			persist(sc, explicit, "tiers.middle.harness", arg)
+			continue
+		case strings.HasPrefix(msg, "/subagents"):
+			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/subagents"))
+			if arg == "" {
+				sc.Printf("%s%d subagents per worker%s", ansiDim, cfg.Tiers.Subagents.MaxConcurrent, ansiReset)
+				continue
+			}
+			n, convErr := strconv.Atoi(arg)
+			if convErr != nil || n < 1 || n > 64 {
+				sc.Print(ansiDim + "usage: /subagents 1-64" + ansiReset)
+				continue
+			}
+			cfg.Tiers.Subagents.MaxConcurrent = n
+			persist(sc, explicit, "tiers.subagents.max_concurrent", arg)
+			continue
+		case strings.HasPrefix(msg, "/config"):
+			parts := strings.Fields(strings.TrimPrefix(msg, "/config"))
+			if len(parts) == 0 {
+				sc.Print(ansiDim + "usage: /config <dotted.path> [value]" + ansiReset)
+				continue
+			}
+			if len(parts) == 1 {
+				if v, gErr := cfg.Get(parts[0]); gErr == nil {
+					sc.Printf("%s%s = %v%s", ansiDim, parts[0], v, ansiReset)
+				} else {
+					sc.Printf("%s%v%s", ansiDim, gErr, ansiReset)
+				}
+				continue
+			}
+			value := strings.Join(parts[1:], " ")
+			if sErr := cfg.SetPath(parts[0], value); sErr != nil {
+				sc.Printf("%s%v%s", ansiDim, sErr, ansiReset)
+				continue
+			}
+			persist(sc, explicit, parts[0], value)
 			continue
 		case strings.HasPrefix(msg, "/autonomy"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/autonomy"))
@@ -177,16 +251,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 				continue
 			}
 			cfg.Autonomy.Level = level
-			if path, perr := resolveConfigPath(explicit); perr == nil {
-				if saved, lerr := config.Load(path); lerr == nil {
-					saved.Autonomy.Level = level
-					if serr := saved.Save(path); serr == nil {
-						sc.Printf("%sautonomy %d · saved to %s%s", ansiGreen, level, path, ansiReset)
-						continue
-					}
-				}
-			}
-			sc.Printf("%sautonomy %d · this session only%s", ansiDim, level, ansiReset)
+			persist(sc, explicit, "autonomy.level", arg)
 			continue
 		}
 
@@ -228,7 +293,9 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			for _, l := range strings.Split(strings.TrimSpace(res.Result), "\n") {
 				sc.Print(l)
 			}
-			sc.Printf("%s%.4f USD this turn%s", ansiFaint, res.TotalCostUSD, ansiReset)
+			spent += res.TotalCostUSD
+			turns++
+			sc.Printf("%s%.4f USD this turn · %.4f total%s", ansiFaint, res.TotalCostUSD, spent, ansiReset)
 		}
 	}
 }
@@ -258,4 +325,23 @@ func firstLines(text string, n, maxChars int) string {
 		out += " …"
 	}
 	return out
+}
+
+// persist writes one config value to the roscoe.json this chat was started
+// with, so a setting changed mid-conversation survives the session.
+func persist(sc *screen, explicit, path, value string) {
+	target, err := resolveConfigPath(explicit)
+	if err == nil {
+		var saved *config.Config
+		if saved, err = config.Load(target); err == nil {
+			if err = saved.SetPath(path, value); err == nil {
+				err = saved.Save(target)
+			}
+		}
+	}
+	if err != nil {
+		sc.Printf("%s%s = %s · this session only (%v)%s", ansiDim, path, value, err, ansiReset)
+		return
+	}
+	sc.Printf("%s%s = %s%s", ansiGreen, path, value, ansiReset)
 }
