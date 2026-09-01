@@ -117,8 +117,12 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 		fmt.Fprintf(os.Stderr, "\n[iteration %d]\n", it.N)
 		session := ""
 		onEvent := func(ev *streamjson.Event) {
-			if ie, ok := ev.AsInit(); ok && ie.SessionID != "" {
-				session = ie.SessionID
+			if ie, ok := ev.AsInit(); ok {
+				if ie.SessionID != "" {
+					session = ie.SessionID
+				}
+				// The harness just told us what the alias resolves to.
+				learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
 			}
 			narrate(ev)
 		}

@@ -345,8 +345,11 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	runPrompt, runResume, runResumeFrom := prompt, *resume, resumeFrom
 	var lastSession string
 	onEvent := func(ev *streamjson.Event) {
-		if ie, ok := ev.AsInit(); ok && ie.SessionID != "" {
-			lastSession = ie.SessionID
+		if ie, ok := ev.AsInit(); ok {
+			if ie.SessionID != "" {
+				lastSession = ie.SessionID
+			}
+			learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
 		}
 		narrate(ev)
 	}

@@ -93,6 +93,9 @@ type MainTier struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Account  string `json:"account"`
+	// Effort is the reasoning level for the top tier, same values as
+	// MiddleTier.Effort. Empty leaves claude's default.
+	Effort string `json:"effort,omitempty"`
 }
 
 type MiddleTier struct {

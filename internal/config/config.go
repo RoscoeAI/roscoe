@@ -59,6 +59,7 @@ func Default() *Config {
 		Tiers: Tiers{
 			Main: MainTier{
 				Kind:     "interactive-mcp",
+				Effort:   "ultracode",
 				Provider: "anthropic",
 				Model:    "opus",
 				Account:  "primary",
@@ -245,6 +246,9 @@ func (c *Config) Validate() []error {
 	provider("tiers.main.provider", c.Tiers.Main.Provider)
 	if c.Tiers.Main.Account != "" {
 		account("tiers.main.account", c.Tiers.Main.Account)
+	}
+	if e := c.Tiers.Main.Effort; e != "" && !validEffort[e] {
+		errs = append(errs, fmt.Errorf("tiers.main.effort %q is not one of %s", e, strings.Join(effortLevels, ", ")))
 	}
 	if t := c.Tiers.Middle.CacheTTL; t != "" && t != "1h" && t != "5m" {
 		errs = append(errs, fmt.Errorf("tiers.middle.cache_ttl %q is not 1h or 5m", t))
@@ -573,6 +577,7 @@ var docs = map[string]string{
 	"router.bind":                               "interface it binds; loopback",
 	"tiers.main.kind":                           "how the top tier runs: interactive or headless",
 	"tiers.main.provider":                       "who serves your own session",
+	"tiers.main.effort":                         "reasoning effort for the top tier; ultracode plans a workflow per task",
 	"tiers.main.model":                          "the model you talk to",
 	"tiers.main.account":                        "which account your session runs under",
 	"tiers.middle.session":                      "per-task; each task gets a fresh worker",

@@ -99,6 +99,12 @@ a knob does not exist rather than leaving a gap:
     width      8 at once
 ```
 
+Model aliases resolve to what they actually are, so a row reads
+`sonnet  →  claude-sonnet-5` rather than leaving you to guess which sonnet.
+Roscoe learns that from the harness's own init event on every run, which needs
+no credential it does not already have; `roscoe models --refresh` also asks
+each provider for its published list where one exists.
+
 Up and down move, left and right step through a setting's values, enter types
 one in, esc closes. Every change is validated and written to `roscoe.json` as
 you make it.

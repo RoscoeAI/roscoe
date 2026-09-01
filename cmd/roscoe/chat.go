@@ -15,6 +15,7 @@ import (
 
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
+	"roscoe.sh/roscoe/internal/models"
 	"roscoe.sh/roscoe/internal/router"
 	"roscoe.sh/roscoe/internal/streamjson"
 	"roscoe.sh/roscoe/internal/worker"
@@ -318,8 +319,12 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		res, runErr := worker.Run(turnCtx,
 			worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token, Resume: session, ResumeFrom: resumeFrom},
 			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: func(ev *streamjson.Event) {
-				if ie, ok := ev.AsInit(); ok && ie.SessionID != "" {
-					session = ie.SessionID
+				if ie, ok := ev.AsInit(); ok {
+					if ie.SessionID != "" {
+						session = ie.SessionID
+					}
+					// The harness just told us what the alias resolves to.
+					learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
 				}
 				narrateTo(sc, ev)
 			}},
@@ -643,6 +648,29 @@ func matching(candidates []string, prefix string) []string {
 
 // modelChoices offers the aliases claude understands plus whatever this
 // config already names, so switching back is a tab away.
+// modelChoicesWith offers the concrete models a provider publishes alongside
+// the aliases, so completion can suggest what actually exists rather than only
+// the three names roscoe happens to hardcode.
+func modelChoicesWith(cfg *config.Config, cat *models.Catalog) []string {
+	out := modelChoices(cfg)
+	if cat == nil {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, v := range out {
+		seen[v] = true
+	}
+	for _, prov := range []string{cfg.Tiers.Main.Provider, cfg.Tiers.Middle.Provider, cfg.Tiers.Subagents.Provider} {
+		for _, m := range cat.Models(prov) {
+			if !seen[m] {
+				seen[m] = true
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
 func modelChoices(cfg *config.Config) []string {
 	seen := map[string]bool{}
 	var out []string

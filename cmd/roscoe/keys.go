@@ -241,9 +241,11 @@ func (c *completer) hintFor(input string) string {
 		return ""
 	}
 	if len(cands) == 1 {
-		tail := "  ⇥"
+		// Just the completion. A trailing tab glyph reads as part of what you
+		// typed, which is worse than not advertising the key at all.
+		tail := ""
 		if c.descends != nil && c.descends(cands[0]) {
-			tail = ".  ⇥"
+			tail = "."
 		}
 		return strings.TrimPrefix(cands[0], token) + tail
 	}

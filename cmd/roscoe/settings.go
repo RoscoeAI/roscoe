@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"roscoe.sh/roscoe/internal/config"
+	"roscoe.sh/roscoe/internal/models"
 )
 
 // settingRow is one line of the settings panel. A heading groups the rows
@@ -36,22 +37,39 @@ func (r settingRow) editable() bool { return r.path != "" }
 // settingsRows is the whole fleet on one surface: every tier's model,
 // provider, and effort, in the order the work flows through them.
 func settingsRows(cfg *config.Config) []settingRow {
+	return settingsRowsWith(cfg, nil)
+}
+
+// settingsRowsWith renders the panel, resolving model aliases through the
+// catalogue when one is loaded: "opus" alone cannot tell you which opus.
+func settingsRowsWith(cfg *config.Config, cat *models.Catalog) []settingRow {
+	show := func(provider, alias string) string {
+		if cat == nil {
+			return alias
+		}
+		return cat.Describe(provider, alias)
+	}
+	_ = show
 	providers := make([]string, 0, len(cfg.Providers))
 	for name := range cfg.Providers {
 		providers = append(providers, name)
 	}
-	models := modelChoices(cfg)
+	modelList := modelChoicesWith(cfg, cat)
 
 	return []settingRow{
 		{heading: "tier 1   your session, the one you talk to"},
-		{label: "model", path: "tiers.main.model", raw: cfg.Tiers.Main.Model, choices: models},
+		{label: "model", path: "tiers.main.model", raw: cfg.Tiers.Main.Model,
+			display: show(cfg.Tiers.Main.Provider, cfg.Tiers.Main.Model), choices: modelList},
 		{label: "provider", path: "tiers.main.provider", raw: cfg.Tiers.Main.Provider, choices: providers},
-		{label: "effort", why: "yours to set, not roscoe's: this is your own claude session"},
+		{label: "effort", path: "tiers.main.effort",
+			raw: cfg.Tiers.Main.Effort, display: effortDisplay(cfg.Tiers.Main.Effort),
+			choices: config.EffortLevels()},
 
 		{heading: "tier 2   workers, one spawned per task"},
-		{label: "model", path: "tiers.middle.model", raw: cfg.Tiers.Middle.Model, choices: models},
+		{label: "model", path: "tiers.middle.model", raw: cfg.Tiers.Middle.Model,
+			display: show(cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model), choices: modelList},
 		{label: "provider", path: "tiers.middle.provider", raw: cfg.Tiers.Middle.Provider, choices: providers},
-		{label: "effort", path: "tiers.middle.effort", raw: cfg.Tiers.Middle.Effort, display: effortOf(cfg), choices: config.EffortLevels()},
+		{label: "effort", path: "tiers.middle.effort", raw: cfg.Tiers.Middle.Effort, display: effortDisplay(cfg.Tiers.Middle.Effort), choices: config.EffortLevels()},
 		{label: "harness", path: "tiers.middle.harness", raw: harnessOf(cfg), choices: []string{"claude", "codex"}},
 		{label: "lean", path: "tiers.middle.lean_context",
 			raw:     boolStr(cfg.Tiers.Middle.Lean()),
@@ -62,7 +80,8 @@ func settingsRows(cfg *config.Config) []settingRow {
 			choices: []string{"1h", "5m"}},
 
 		{heading: "tier 3   the swarm each worker fans out to"},
-		{label: "model", path: "tiers.subagents.model", raw: cfg.Tiers.Subagents.Model, choices: models},
+		{label: "model", path: "tiers.subagents.model", raw: cfg.Tiers.Subagents.Model,
+			display: show(cfg.Tiers.Subagents.Provider, cfg.Tiers.Subagents.Model), choices: modelList},
 		{label: "provider", path: "tiers.subagents.provider", raw: cfg.Tiers.Subagents.Provider, choices: providers},
 		{label: "effort", why: "claude code has no per-subagent effort knob; tier 2's applies"},
 		{label: "width", path: "tiers.subagents.max_concurrent",
@@ -91,9 +110,10 @@ func leanDisplay(lean bool) string {
 	return "false  workers load your full ~/.claude"
 }
 
-// effortOf names the empty case rather than showing a blank cell.
-func effortOf(cfg *config.Config) string {
-	if e := cfg.Tiers.Middle.Effort; e != "" {
+// effortDisplay names the empty case rather than showing a blank cell, so
+// "unset" is never mistaken for "off".
+func effortDisplay(e string) string {
+	if e != "" {
 		return e
 	}
 	return "claude's default"
@@ -183,7 +203,9 @@ func firstSelectable(rows []settingRow) int {
 // move, enter edits the selected value, esc closes. Every edit is validated
 // and persisted before the panel redraws.
 func runSettings(sc *screen, keys *keyReader, cfg *config.Config, explicit string) {
-	rows := settingsRows(cfg)
+	// Resolve aliases so the panel can say which opus.
+	cat := models.Open(cfg.StateDir)
+	rows := settingsRowsWith(cfg, cat)
 	sel := firstSelectable(rows)
 	defer sc.Overlay(nil)
 
@@ -207,7 +229,7 @@ func runSettings(sc *screen, keys *keyReader, cfg *config.Config, explicit strin
 			}
 			if next := cycleChoice(row.choices, row.raw, step); next != "" {
 				applySetting(sc, cfg, explicit, row, next)
-				rows = settingsRows(cfg)
+				rows = settingsRowsWith(cfg, cat)
 			}
 		case "enter":
 			row := rows[sel]
@@ -218,7 +240,7 @@ func runSettings(sc *screen, keys *keyReader, cfg *config.Config, explicit strin
 			if ok {
 				applySetting(sc, cfg, explicit, row, strings.TrimSpace(val))
 			}
-			rows = settingsRows(cfg)
+			rows = settingsRowsWith(cfg, cat)
 		case "esc", "ctrl-c", "eof":
 			sc.SetPrompt("", "", "", "")
 			return

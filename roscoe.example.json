@@ -60,6 +60,7 @@
   "tiers": {
     "main": {
       "kind": "interactive-mcp",
+      "effort": "ultracode",
       "provider": "anthropic",
       "model": "opus",
       "account": "primary"

@@ -87,8 +87,14 @@ func TestHintIsRelativeToLevel(t *testing.T) {
 	if strings.Contains(hint, "tiers.main") {
 		t.Errorf("hint %q repeats the parent path", hint)
 	}
-	if got := comp.hintFor("/config auton"); !strings.HasSuffix(got, "⇥") {
-		t.Errorf("a single match should show the tab affordance, got %q", got)
+	// The ghost text is the completion itself. A trailing tab glyph reads as
+	// part of what you typed, so a single match shows only what tab would add
+	// (plus a dot when there is a level below).
+	if got := comp.hintFor("/config auton"); got != "omy." {
+		t.Errorf("single match hint = %q, want just the completion", got)
+	}
+	if strings.ContainsAny(comp.hintFor("/setti"), "⇥") {
+		t.Error("the hint still carries a tab glyph")
 	}
 }
 
