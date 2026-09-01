@@ -172,6 +172,21 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		// A worker that keeps failing is a broken setup, not a hard task.
 		if err != nil {
 			consecutiveErrors++
+			// Escalate the recovery rather than repeating it. The first retry
+			// keeps the session, since most failures are transient and the
+			// transcript is worth having. A second consecutive failure drops
+			// it and starts cold, because the likeliest cause of a repeated
+			// failure is the transcript itself: it is never trimmed on this
+			// path and `claude -p --resume` rebuilds the whole log into one
+			// request, so a long run eventually cannot resume at all. Starting
+			// cold is exactly what loop.md is for.
+			if consecutiveErrors >= 2 && resume != "" {
+				o.note("loop.cold_restart", map[string]any{
+					"task": o.TaskID, "iteration": n, "dropped_session": resume,
+					"reason": "consecutive failures; continuing from loop.md alone",
+				})
+				resume = ""
+			}
 			if consecutiveErrors >= o.MaxConsecutiveErrors {
 				sum.Action = Abort
 				sum.Reason = fmt.Sprintf("%d iterations in a row failed; last: %v", consecutiveErrors, err)

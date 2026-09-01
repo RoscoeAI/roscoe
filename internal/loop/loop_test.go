@@ -423,3 +423,60 @@ func TestHarnessReportedFailureCountsAsAnError(t *testing.T) {
 		t.Errorf("reason should be one line, got %q", sum.Reason)
 	}
 }
+
+// The loop's transcript is never trimmed and `claude -p --resume` rebuilds the
+// whole log into one request, so a long run eventually cannot resume at all.
+// Repeated failure must drop the session and continue from loop.md rather than
+// retry into the same wall until it aborts.
+func TestRepeatedFailureRestartsCold(t *testing.T) {
+	dir := t.TempDir()
+	var resumes []string
+	fail := errors.New("prompt is too long")
+	calls := 0
+	dispatch := func(_ context.Context, _ Iteration, _, resume string) (*streamjson.ResultEvent, string, error) {
+		resumes = append(resumes, resume)
+		calls++
+		if calls <= 2 { // the first two attempts fail
+			return &streamjson.ResultEvent{SessionID: "sess-1"}, "sess-1", fail
+		}
+		_ = Write(dir, "## Status\ndone\n")
+		return &streamjson.ResultEvent{SessionID: "sess-2"}, "sess-2", nil
+	}
+	sum, err := Run(context.Background(), Options{
+		Dir: dir, Charter: "x", Dispatch: dispatch,
+		MaxIterations: 10, MaxConsecutiveErrors: 5,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if sum.Action != Done {
+		t.Errorf("action = %s, want done after recovering cold", sum.Action)
+	}
+	if len(resumes) < 3 {
+		t.Fatalf("only %d dispatches", len(resumes))
+	}
+	if resumes[0] != "" {
+		t.Errorf("first dispatch resumed %q, want a fresh session", resumes[0])
+	}
+	if resumes[1] != "sess-1" {
+		t.Errorf("the first retry should keep the session, got %q", resumes[1])
+	}
+	if resumes[2] != "" {
+		t.Errorf("the second retry should start cold, got %q", resumes[2])
+	}
+}
+
+// A single failure is still worth retrying warm: most are transient and the
+// transcript is worth keeping.
+func TestOneFailureKeepsTheSession(t *testing.T) {
+	f := &fakeWorker{
+		statuses: []string{StatusContinuing, StatusDone},
+		errs:     []error{errors.New("transient")},
+	}
+	if _, err := newRun(t, f, Options{MaxIterations: 10}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if f.resumes[1] != "sess-1" {
+		t.Errorf("a single failure dropped the session (%q); it should retry warm", f.resumes[1])
+	}
+}
