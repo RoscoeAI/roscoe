@@ -9,11 +9,11 @@ import (
 	"sync"
 )
 
-// ANSI palette, matched to roscoe.sh: phosphor green accent on the terminal's
-// own ground, dim parchment for secondary text.
-// boxRows is how many bottom rows the input box occupies.
+// boxRows is how many bottom rows the input box occupies: border, input, border.
 const boxRows = 3
 
+// ANSI palette, matched to roscoe.sh: phosphor green accent on the terminal's
+// own ground, dim parchment for secondary text.
 const (
 	ansiReset  = "\x1b[0m"
 	ansiGreen  = "\x1b[38;5;114m"
@@ -25,16 +25,20 @@ const (
 	ansiClrEOL = "\x1b[K"
 )
 
-// screen pins a prompt line to the bottom row and scrolls output above it,
-// using a DECSTBM scroll region. Everything roscoe prints goes through
-// Print/Printf so the prompt is redrawn afterwards.
+// screen owns the terminal: a scrollback buffer painted into the region above
+// a pinned input box. Output appends to the buffer; the viewport shows the
+// tail unless the operator has scrolled back.
 type screen struct {
 	mu     sync.Mutex
 	rows   int
 	cols   int
 	prompt string
 	input  string
+	hint   string // completion hint shown after the input
 	active bool
+
+	lines  []string // display lines, pre-wrapped to the terminal width
+	offset int      // rows scrolled back; 0 follows new output
 }
 
 func newScreen() *screen {
@@ -50,7 +54,7 @@ func (s *screen) measure() {
 	out, err := cmd.Output()
 	if err == nil {
 		if parts := strings.Fields(string(out)); len(parts) == 2 {
-			if r, err := strconv.Atoi(parts[0]); err == nil && r > 4 {
+			if r, err := strconv.Atoi(parts[0]); err == nil && r > 6 {
 				s.rows = r
 			}
 			if c, err := strconv.Atoi(parts[1]); err == nil && c > 20 {
@@ -60,18 +64,23 @@ func (s *screen) measure() {
 	}
 }
 
-// Enter reserves the bottom row for the prompt.
+func (s *screen) viewHeight() int {
+	if h := s.rows - boxRows; h > 0 {
+		return h
+	}
+	return 1
+}
+
+// Enter takes over the screen.
 func (s *screen) Enter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = true
-	// Scroll region = everything above the input box. Output starts at the
-	// top and grows down, scrolling only once it reaches the bottom, so a
-	// short conversation is not stranded at the foot of the screen.
-	fmt.Fprintf(os.Stdout, "\x1b[1;%dr\x1b[1;1H\x1b7", s.rows-boxRows)
+	fmt.Fprint(os.Stdout, "\x1b[2J")
+	s.repaintLocked()
 }
 
-// Leave restores the full-screen scroll region.
+// Leave restores a normal terminal.
 func (s *screen) Leave() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -79,13 +88,11 @@ func (s *screen) Leave() {
 		return
 	}
 	s.active = false
-	fmt.Fprintf(os.Stdout, "\x1b[r\x1b[%d;1H%s%s\n", s.rows, ansiClrEOL, ansiShow)
-	for i := 0; i < boxRows; i++ {
-		fmt.Fprint(os.Stdout, ansiClrEOL+"\n")
-	}
+	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s\n", s.rows, ansiClrEOL, ansiShow)
 }
 
-// Print writes a line into the scrolling region above the prompt.
+// Print appends output. Long lines are wrapped here so scroll math matches
+// what the terminal shows.
 func (s *screen) Print(line string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,26 +100,78 @@ func (s *screen) Print(line string) {
 		fmt.Fprintln(os.Stdout, line)
 		return
 	}
-	// Restore the output cursor, emit the line where it left off, save the new
-	// position, then repaint the pinned prompt.
-	fmt.Fprintf(os.Stdout, "%s\x1b8%s\n\x1b7", ansiHide, ansiClrEOL+line)
-	s.drawPromptLocked()
+	s.lines = append(s.lines, wrapVisible(line, s.cols)...)
+	const maxScrollback = 5000
+	if len(s.lines) > maxScrollback {
+		s.lines = s.lines[len(s.lines)-maxScrollback:]
+	}
+	if s.offset == 0 { // following the tail
+		s.repaintLocked()
+	}
 }
 
 func (s *screen) Printf(format string, args ...any) {
 	s.Print(strings.TrimRight(fmt.Sprintf(format, args...), "\n"))
 }
 
-// SetPrompt changes the label and current input, then repaints.
-func (s *screen) SetPrompt(prompt, input string) {
+// Scroll moves the viewport; negative delta goes back in time.
+func (s *screen) Scroll(delta int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.prompt, s.input = prompt, input
-	s.drawPromptLocked()
+	if !s.active {
+		return
+	}
+	max := len(s.lines) - s.viewHeight()
+	if max < 0 {
+		max = 0
+	}
+	s.offset -= delta
+	if s.offset < 0 {
+		s.offset = 0
+	}
+	if s.offset > max {
+		s.offset = max
+	}
+	s.repaintLocked()
 }
 
-// drawPromptLocked paints the three-row input box across the bottom.
-func (s *screen) drawPromptLocked() {
+// SetPrompt updates the input line (and its completion hint) only.
+func (s *screen) SetPrompt(prompt, input, hint string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prompt, s.input, s.hint = prompt, input, hint
+	s.drawBoxLocked()
+}
+
+func (s *screen) repaintLocked() {
+	if !s.active {
+		return
+	}
+	h := s.viewHeight()
+	end := len(s.lines) - s.offset
+	if end < 0 {
+		end = 0
+	}
+	start := end - h
+	if start < 0 {
+		start = 0
+	}
+	view := s.lines[start:end]
+
+	var b strings.Builder
+	b.WriteString(ansiHide)
+	for i := 0; i < h; i++ {
+		fmt.Fprintf(&b, "\x1b[%d;1H%s", i+1, ansiClrEOL)
+		if i < len(view) {
+			b.WriteString(view[i])
+		}
+	}
+	fmt.Fprint(os.Stdout, b.String())
+	s.drawBoxLocked()
+}
+
+// drawBoxLocked paints the three-row input box across the bottom.
+func (s *screen) drawBoxLocked() {
 	if !s.active {
 		return
 	}
@@ -120,53 +179,94 @@ func (s *screen) drawPromptLocked() {
 	if inner < 10 {
 		inner = 10
 	}
-	top := "╭" + strings.Repeat("─", inner) + "╮"
-	bottom := "╰" + strings.Repeat("─", inner) + "╯"
-
-	// The visible input scrolls with the cursor when it outgrows the box.
-	body := s.prompt + s.input
-	visible := body
-	if len([]rune(visible)) > inner-2 {
-		r := []rune(visible)
-		visible = string(r[len(r)-(inner-2):])
-	}
-	pad := inner - 1 - len([]rune(visible))
-	if pad < 0 {
-		pad = 0
+	label := s.prompt
+	if s.offset > 0 {
+		label = fmt.Sprintf("%d↑ %s", s.offset, s.prompt)
 	}
 
-	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s%s%s",
-		ansiHide, s.rows-2, ansiClrEOL, ansiFaint, top, ansiReset)
-	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s│%s %s%s%s%s│%s",
+	typed := label + s.input
+	if len([]rune(typed)) > inner-2 {
+		r := []rune(typed)
+		typed = string(r[len(r)-(inner-2):])
+	}
+	rest := inner - 1 - len([]rune(typed))
+	if rest < 0 {
+		rest = 0
+	}
+	hint := s.hint
+	if len([]rune(hint)) > rest {
+		hint = string([]rune(hint)[:rest])
+	}
+	pad := rest - len([]rune(hint))
+
+	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s╭%s╮%s",
+		ansiHide, s.rows-2, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
+	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s│%s %s%s%s%s%s%s%s│%s",
 		s.rows-1, ansiClrEOL, ansiFaint, ansiReset,
-		ansiGreen+s.prompt+ansiReset, s.input, strings.Repeat(" ", pad), ansiFaint, ansiReset)
-	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s%s%s",
-		s.rows, ansiClrEOL, ansiFaint, bottom, ansiReset)
-	// Park the cursor just after the typed text, inside the box.
-	fmt.Fprintf(os.Stdout, "\x1b[%d;%dH%s", s.rows-1, 3+len([]rune(body)), ansiShow)
+		ansiGreen+label+ansiReset, s.input,
+		ansiFaint, hint, ansiReset, strings.Repeat(" ", pad), ansiFaint, ansiReset)
+	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s╰%s╯%s",
+		s.rows, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
+	// Park the cursor right after what has been typed.
+	fmt.Fprintf(os.Stdout, "\x1b[%d;%dH%s", s.rows-1, 3+len([]rune(label+s.input)), ansiShow)
 }
 
-// Resize re-measures the terminal and re-establishes the region.
+// Resize re-measures and repaints; wrapped lines keep their old width, which
+// self-corrects as new output arrives.
 func (s *screen) Resize() {
-	s.mu.Lock()
-	wasActive := s.active
-	s.mu.Unlock()
 	s.measure()
-	if wasActive {
-		s.mu.Lock()
-		fmt.Fprintf(os.Stdout, "\x1b[1;%dr", s.rows-boxRows)
-		s.mu.Unlock()
-		s.SetPrompt(s.prompt, s.input)
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repaintLocked()
 }
 
-// Banner prints the chat header in the site's voice.
+// Banner prints the chat header.
 func (s *screen) Banner(model, harness, dir string) {
 	home, _ := os.UserHomeDir()
 	shown := dir
 	if home != "" && strings.HasPrefix(dir, home) {
 		shown = "~" + dir[len(home):]
 	}
-	s.Print("")
 	s.Print(ansiGreen + ansiBold + "  roscoe" + ansiReset + ansiFaint + "  " + model + " · " + harness + " · " + shown + ansiReset)
+}
+
+// wrapVisible splits a styled line into chunks occupying at most width
+// columns, counting printable runes only so ANSI sequences do not consume
+// the budget.
+func wrapVisible(line string, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+	var (
+		out     []string
+		cur     strings.Builder
+		visible int
+		inEsc   bool
+	)
+	flush := func() {
+		out = append(out, cur.String())
+		cur.Reset()
+		visible = 0
+	}
+	for _, r := range line {
+		if inEsc {
+			cur.WriteRune(r)
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == 0x1b {
+			cur.WriteRune(r)
+			inEsc = true
+			continue
+		}
+		if visible == width {
+			flush()
+		}
+		cur.WriteRune(r)
+		visible++
+	}
+	flush()
+	return out
 }

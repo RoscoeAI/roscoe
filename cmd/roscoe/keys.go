@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -98,66 +99,189 @@ func (k *keyReader) ReadLine(promptStr string) (string, bool) {
 	return "", false
 }
 
-// ReadLineOn collects a line into the pinned prompt of a screen, repainting
-// as the operator types. Enter submits; Esc or Ctrl+C abort (ok=false).
-func (k *keyReader) ReadLineOn(sc *screen, promptStr string) (string, bool) {
+// ReadLineOn collects a line into the pinned prompt of a screen. Enter
+// submits; up/down scroll the conversation; tab completes a slash command;
+// Esc or Ctrl+C abandon the line (ok=false). history is the previous inputs,
+// oldest first, walked with up/down once the line is empty.
+func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string) (string, bool) {
 	var b []byte
-	sc.SetPrompt(promptStr, "")
+	hist := len(history) // index into history; len == "current, unsaved line"
+	redraw := func() { sc.SetPrompt(promptStr, string(b), completionHint(string(b))) }
+	redraw()
+
 	for c := range k.events {
 		switch {
 		case c == '\r' || c == '\n':
 			line := string(b)
-			sc.SetPrompt(promptStr, "")
+			sc.SetPrompt(promptStr, "", "")
 			return line, true
+
 		case c == 0x7f || c == 0x08:
 			if len(b) > 0 {
 				b = b[:len(b)-1]
 			}
+
+		case c == '\t':
+			if done := completeCommand(string(b)); done != "" {
+				b = []byte(done)
+			}
+
 		case c == 0x1b:
-			// Arrow keys and friends arrive as ESC [ … ; only a bare Esc means
-			// "abandon this line".
-			if k.consumeEscapeSequence() {
+			switch k.escapeKey() {
+			case "esc":
+				return "", false
+			case "up":
+				if len(b) == 0 && hist > 0 { // recall a previous prompt
+					hist--
+					b = []byte(history[hist])
+				} else {
+					sc.Scroll(-1)
+				}
+			case "down":
+				if len(b) == 0 || hist < len(history) {
+					if hist < len(history)-1 {
+						hist++
+						b = []byte(history[hist])
+					} else if hist == len(history)-1 {
+						hist++
+						b = nil
+					} else {
+						sc.Scroll(1)
+					}
+				} else {
+					sc.Scroll(1)
+				}
+			case "pgup":
+				sc.Scroll(-10)
+			case "pgdn":
+				sc.Scroll(10)
+			default:
 				continue
 			}
-			return "", false
+
 		case c == 0x03:
 			return "", false
+
 		case c >= 0x20 && c < 0x7f:
 			b = append(b, c)
+
 		default:
 			continue
 		}
-		sc.SetPrompt(promptStr, string(b))
+		redraw()
 	}
 	return "", false
 }
 
-// consumeEscapeSequence reports whether the Esc just read began a terminal
-// escape sequence (arrow keys, home/end, mouse), swallowing the rest of it.
-// A bare Esc — nothing following within a beat — returns false.
-func (k *keyReader) consumeEscapeSequence() bool {
+// chatCommands is the slash-command surface, used for hints and completion.
+var chatCommands = []string{
+	"/autonomy", "/config", "/cost", "/exit", "/harness",
+	"/help", "/model", "/new", "/session", "/subagents",
+}
+
+// completionHint suggests the rest of a slash command as ghost text, or lists
+// the commands once "/" is typed.
+func completionHint(input string) string {
+	if input == "" || !strings.HasPrefix(input, "/") || strings.Contains(input, " ") {
+		return ""
+	}
+	if input == "/" {
+		return strings.Join(trimPrefixes(chatCommands), " ")
+	}
+	var matches []string
+	for _, c := range chatCommands {
+		if strings.HasPrefix(c, input) {
+			matches = append(matches, c)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return ""
+	case 1:
+		return matches[0][len(input):] + "  ⇥"
+	default:
+		return "  " + strings.Join(matches, " ")
+	}
+}
+
+// completeCommand returns the completed command for a tab press, or "" when
+// there is nothing unambiguous to complete.
+func completeCommand(input string) string {
+	if !strings.HasPrefix(input, "/") || strings.Contains(input, " ") {
+		return ""
+	}
+	var matches []string
+	for _, c := range chatCommands {
+		if strings.HasPrefix(c, input) {
+			matches = append(matches, c)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0] + " "
+	}
+	return ""
+}
+
+func trimPrefixes(cmds []string) []string {
+	out := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		out = append(out, strings.TrimPrefix(c, "/"))
+	}
+	return out
+}
+
+// escapeKey resolves the Esc just read into a named key. A bare Esc — nothing
+// following within a beat — returns "esc"; recognised sequences return "up",
+// "down", "pgup", "pgdn", "left", "right", "home", "end"; anything else
+// returns "" after being swallowed.
+func (k *keyReader) escapeKey() string {
+	var intro byte
 	select {
 	case c, ok := <-k.events:
 		if !ok {
-			return false
+			return "esc"
 		}
-		if c != '[' && c != 'O' {
-			return false
-		}
-		for {
-			select {
-			case f, ok := <-k.events:
-				if !ok {
-					return true
-				}
-				if f >= 0x40 && f <= 0x7e { // final byte of a CSI sequence
-					return true
-				}
-			case <-time.After(50 * time.Millisecond):
-				return true
-			}
-		}
+		intro = c
 	case <-time.After(50 * time.Millisecond):
-		return false
+		return "esc"
+	}
+	if intro != '[' && intro != 'O' {
+		return ""
+	}
+	var seq []byte
+	for {
+		select {
+		case f, ok := <-k.events:
+			if !ok {
+				return ""
+			}
+			if f >= 0x40 && f <= 0x7e { // final byte
+				switch f {
+				case 'A':
+					return "up"
+				case 'B':
+					return "down"
+				case 'C':
+					return "right"
+				case 'D':
+					return "left"
+				case 'H':
+					return "home"
+				case 'F':
+					return "end"
+				case '~':
+					switch string(seq) {
+					case "5":
+						return "pgup"
+					case "6":
+						return "pgdn"
+					}
+				}
+				return ""
+			}
+			seq = append(seq, f)
+		case <-time.After(50 * time.Millisecond):
+			return ""
+		}
 	}
 }

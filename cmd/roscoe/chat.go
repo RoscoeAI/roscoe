@@ -94,6 +94,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	account, token := resolveMiddleAccount(cfg, env)
 	var spent float64
 	var turns int
+	var history []string
 
 	keys, restore, err := newKeyReader()
 	if err != nil {
@@ -117,16 +118,16 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	// A resumed conversation should be visible, not just loaded: replay the
 	// tail so the operator picks up where they left off.
 	if resumeFrom != "" {
-		if msgs, mErr := worker.RecentMessages(resumeFrom, 8); mErr == nil && len(msgs) > 0 {
+		if msgs, mErr := worker.RecentMessages(resumeFrom, 40); mErr == nil && len(msgs) > 0 {
 			sc.Print("")
 			sc.Printf("%s─ earlier in this conversation ─%s", ansiFaint, ansiReset)
 			for _, m := range msgs {
 				sc.Print("")
 				if m.Role == "user" {
-					sc.Print(ansiGreen + "› " + ansiReset + ansiBold + firstLines(m.Text, 3, 200) + ansiReset)
+					sc.Print(ansiGreen + "› " + ansiReset + ansiBold + firstLines(m.Text, 6, 600) + ansiReset)
 					continue
 				}
-				sc.Print(ansiDim + firstLines(m.Text, 4, 300) + ansiReset)
+				sc.Print(ansiDim + firstLines(m.Text, 8, 800) + ansiReset)
 			}
 			sc.Print("")
 			sc.Printf("%s─ picking up here ─%s", ansiFaint, ansiReset)
@@ -134,13 +135,16 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	}
 
 	for {
-		line, ok := keys.ReadLineOn(sc, "› ")
+		line, ok := keys.ReadLineOn(sc, "› ", history)
 		if !ok {
 			sc.Leave()
 			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
 			return 0
 		}
 		msg := strings.TrimSpace(line)
+		if msg != "" {
+			history = append(history, msg)
+		}
 		if msg != "" && !strings.HasPrefix(msg, "/") {
 			sc.Print("")
 			sc.Print(ansiGreen + "› " + ansiReset + ansiBold + msg + ansiReset)
