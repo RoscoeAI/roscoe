@@ -19,7 +19,7 @@ func (StatusJudge) Decide(_ context.Context, it Iteration) (Decision, error) {
 		return Decision{
 			Action: Continue,
 			Prompt: fmt.Sprintf("The previous iteration failed with: %v\n\n%s",
-				it.Err, KernelPrompt(it.Charter)),
+				it.Err, KernelPrompt(it.Charter, Projection(it.LoopMD, 0))),
 			Reason:     "retrying after a failed iteration",
 			Confidence: 0.5,
 		}, nil
@@ -33,7 +33,7 @@ func (StatusJudge) Decide(_ context.Context, it Iteration) (Decision, error) {
 	default:
 		return Decision{
 			Action:     Continue,
-			Prompt:     KernelPrompt(it.Charter),
+			Prompt:     KernelPrompt(it.Charter, Projection(it.LoopMD, 0)),
 			Reason:     "still continuing",
 			Confidence: 1,
 		}, nil

@@ -132,8 +132,11 @@ point between iterations, which is where the quorum and `autonomy.level` will
 sit.
 
 `loop.md` is the working memory: the charter, the plan, what has been tried,
-and durable notes. Each iteration reads it and rewrites it, and sets a status
-of `continuing`, `done`, or `blocked`. `done` ends the run, `blocked` escalates.
+and durable notes. The worker never opens it. The supervisor inlines the parts
+worth carrying into the prompt, and the worker ends its reply with a small
+block that the supervisor folds back in, so bookkeeping costs no tool calls and
+the format is parsed rather than trusted. A status of `continuing`, `done`, or
+`blocked` says where the run stands. `done` ends the run, `blocked` escalates.
 What has been tried and learned only ever accumulates: the supervisor snapshots
 the file before each iteration and puts back anything the worker dropped, so a
 careless rewrite cannot erase a dead end and send the next iteration walking

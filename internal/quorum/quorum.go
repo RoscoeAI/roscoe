@@ -94,7 +94,7 @@ func (q *Quorum) Decide(ctx context.Context, it loop.Iteration) (loop.Decision, 
 	if it.Err != nil {
 		d := loop.Decision{
 			Action:     loop.Continue,
-			Prompt:     fmt.Sprintf("The previous iteration failed with: %v\n\n%s", it.Err, loop.KernelPrompt(it.Charter)),
+			Prompt:     fmt.Sprintf("The previous iteration failed with: %v\n\n%s", it.Err, loop.KernelPrompt(it.Charter, loop.Projection(it.LoopMD, 0))),
 			Reason:     "retrying after a failed iteration; not put to a vote",
 			Confidence: 0.5,
 		}
@@ -175,7 +175,7 @@ func (q *Quorum) tally(it loop.Iteration, verdicts []Verdict) loop.Decision {
 		Confidence: conf,
 	}
 	if winner == loop.Continue {
-		d.Prompt = loop.KernelPrompt(it.Charter)
+		d.Prompt = loop.KernelPrompt(it.Charter, loop.Projection(it.LoopMD, 0))
 	}
 	return d
 }
@@ -186,7 +186,7 @@ func (q *Quorum) unsure(it loop.Iteration, why string) loop.Decision {
 	if q.AutonomyLevel >= 100 {
 		return loop.Decision{
 			Action:     loop.Continue,
-			Prompt:     loop.KernelPrompt(it.Charter),
+			Prompt:     loop.KernelPrompt(it.Charter, loop.Projection(it.LoopMD, 0)),
 			Reason:     why + "; continuing because autonomy is 100",
 			Confidence: 0.5,
 		}

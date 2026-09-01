@@ -200,8 +200,10 @@ func TestKernelPromptIsStable(t *testing.T) {
 	if _, err := newRun(t, f, Options{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if f.prompts[0] != f.prompts[1] {
-		t.Errorf("prompts drifted between iterations:\n%q\nvs\n%q", f.prompts[0], f.prompts[1])
+	// Only the memory projection may differ; the instruction half must not.
+	if invariantOf(f.prompts[0]) != invariantOf(f.prompts[1]) {
+		t.Errorf("the instruction half drifted between iterations:\n%q\nvs\n%q",
+			invariantOf(f.prompts[0]), invariantOf(f.prompts[1]))
 	}
 	for _, want := range []string{FileName, StatusDone, StatusBlocked, "do the thing"} {
 		if !strings.Contains(f.prompts[0], want) {
@@ -558,4 +560,19 @@ func TestRecalledSectionIsNotPreserved(t *testing.T) {
 			t.Errorf("restored stale recall %q", e)
 		}
 	}
+}
+
+// invariantOf strips the memory projection, leaving the half of the kernel
+// prompt that must never change between iterations.
+func invariantOf(prompt string) string {
+	const open, close = "--- MEMORY (" + FileName + ") ---", "--- END MEMORY ---"
+	i := strings.Index(prompt, open)
+	if i < 0 {
+		return prompt
+	}
+	j := strings.Index(prompt, close)
+	if j < 0 {
+		return prompt
+	}
+	return prompt[:i] + prompt[j+len(close):]
 }

@@ -136,7 +136,8 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 	}
 
 	sum := &Summary{Status: StatusContinuing}
-	prompt := KernelPrompt(o.Charter)
+	seed, _ := Read(o.Dir)
+	prompt := KernelPrompt(o.Charter, Projection(seed, 0))
 	resume := ""
 	consecutiveErrors := 0
 
@@ -176,6 +177,28 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		if readErr != nil && err == nil {
 			err = readErr
 		}
+		// The worker's own words, folded in by the supervisor rather than
+		// written by the worker. Falls back silently when the block is absent:
+		// a worker that edited the file directly is still correct, just more
+		// expensive.
+		if res != nil {
+			if tail, ok := ParseTail(res.Result); ok {
+				if applied := ApplyTail(md, tail); applied != md {
+					if werr := Write(o.Dir, applied); werr == nil {
+						md = applied
+						o.note("loop.tail_applied", map[string]any{
+							"task": o.TaskID, "iteration": n, "status": tail.Status,
+						})
+					}
+				}
+			} else if err == nil {
+				o.note("loop.tail_degraded", map[string]any{
+					"task": o.TaskID, "iteration": n,
+					"detail": "no loop block in the result; relying on whatever the worker wrote",
+				})
+			}
+		}
+
 		if merged, restored := MergePreserving(before, md); len(restored) > 0 {
 			if werr := Write(o.Dir, merged); werr != nil {
 				o.note("loop.memory_restore_failed", map[string]any{
@@ -262,7 +285,7 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 		}
 		prompt = d.Prompt
 		if strings.TrimSpace(prompt) == "" {
-			prompt = KernelPrompt(o.Charter)
+			prompt = KernelPrompt(o.Charter, Projection(md, 0))
 		}
 	}
 
@@ -296,29 +319,44 @@ func (o Options) note(kind string, v any) {
 	}
 }
 
-// KernelPrompt is the instruction every iteration starts from. It stays small
-// and identical across iterations on purpose: loop.md carries the state, so
-// the prompt does not have to, and the worker cannot drift by being told a
-// slightly different thing each time.
-func KernelPrompt(charter string) string {
-	return fmt.Sprintf(`Read %s in the working directory. It is your memory across iterations: the charter, the plan, what has already been tried, and what has been learned. Earlier iterations wrote it; you are continuing their work, not starting over.
+// KernelPrompt is the instruction every iteration starts from. The invariant
+// half is byte-identical every time on purpose: only the memory projection
+// changes, so the worker cannot drift by being told a slightly different thing
+// each turn.
+//
+// The memory is inlined rather than read, which saves a tool call and works
+// the same on the codex path where no session resumes. It MUST reach the
+// worker as the -p prompt: putting it through --append-system-prompt would
+// place it before the whole cached prefix and force a full cache re-creation
+// every iteration.
+func KernelPrompt(charter, memory string) string {
+	var b strings.Builder
+	b.WriteString("You are continuing work earlier iterations started. Their memory follows. You did not write it; you are building on it, not starting over.\n\n")
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString("--- MEMORY (" + FileName + ") ---\n")
+		b.WriteString(strings.TrimSpace(memory))
+		b.WriteString("\n--- END MEMORY ---\n\n")
+	}
+	b.WriteString(`Do the next useful piece of work toward the charter.
 
-Do the next useful piece of work toward the charter.
+End your final message with this block. It is how the next iteration inherits what you learned, so write it for someone who was not here. Do not edit ` + FileName + ` yourself; the supervisor folds this in.
 
-Before you finish this turn, rewrite %s so the next iteration can pick up cold:
-- Set the line under "## Status" to exactly one of: %s, %s, %s.
-  Use %s only when the charter is genuinely satisfied, and %s when you need a
-  human decision you cannot make yourself.
-- Keep "## Plan" current, checking off what is finished.
-- Append to "## Tried" what you attempted this turn and what happened, including
-  what did not work. That is what stops the next iteration repeating it.
-- Put durable facts about this codebase under "## Notes".
+` + tailFence + `
+STATUS: ` + StatusContinuing + ` | ` + StatusDone + ` | ` + StatusBlocked + `
+PLAN:
+- [x] what is finished
+- [ ] what is left
+TRIED:
+- what you attempted this turn and what happened, including what did not work
+NOTES:
+- durable facts about this codebase
+` + "```" + `
 
-Charter: %s`,
-		FileName, FileName,
-		StatusContinuing, StatusDone, StatusBlocked,
-		StatusDone, StatusBlocked,
-		strings.TrimSpace(charter))
+Use ` + StatusDone + ` only when the charter is genuinely satisfied, and ` + StatusBlocked + ` when you need a human decision you cannot make yourself. TRIED and NOTES are appended, never replaced, so add only what is new this turn.
+
+Charter: `)
+	b.WriteString(strings.TrimSpace(charter))
+	return b.String()
 }
 
 // firstLine trims a result to something that fits one ledger line.
@@ -328,7 +366,7 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	if len(s) > 200 {
-		s = s[:200] + "…"
+		s = s[:200] + "\u2026"
 	}
 	if s == "" {
 		return "(no detail)"
