@@ -221,6 +221,9 @@ func (c *Config) Validate() []error {
 	if c.Tiers.Main.Account != "" {
 		account("tiers.main.account", c.Tiers.Main.Account)
 	}
+	if t := c.Tiers.Middle.CacheTTL; t != "" && t != "1h" && t != "5m" {
+		errs = append(errs, fmt.Errorf("tiers.middle.cache_ttl %q is not 1h or 5m", t))
+	}
 	if e := c.Tiers.Middle.Effort; e != "" && !validEffort[e] {
 		// claude only warns and falls back to its default, which silently
 		// costs you the reasoning you asked for; fail here instead.
@@ -484,6 +487,7 @@ var docs = map[string]string{
 	"tiers.main":                                "the session you talk to",
 	"tiers.middle":                              "the headless workers that do the work",
 	"tiers.middle.harness":                      "claude or codex",
+	"tiers.middle.cache_ttl":                    "how long the prompt prefix stays cached: 1h or 5m",
 	"tiers.middle.lean_context":                 "strip your MCP servers and personal skills from workers; a much cheaper prompt prefix",
 	"tiers.middle.effort":                       "reasoning effort; ultracode adds a planned workflow per task",
 	"tiers.middle.orchestrate":                  "fan out with workflows below ultracode effort; ultracode does it already",

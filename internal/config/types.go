@@ -107,6 +107,15 @@ type MiddleTier struct {
 	// which is roscoe's shape exactly: the worker plans, and the fan-out
 	// lands on the cheap tier-3 swarm through the router.
 	Effort string `json:"effort,omitempty"`
+	// CacheTTL is how long the prompt prefix stays cached upstream: "1h"
+	// (default) or "5m". The tradeoff is arithmetic, not taste. A 1h write
+	// costs 2x base input, a 5m write 1.25x, and a read 0.1x. On the measured
+	// 47,508-token lean prefix that is $0.190 vs $0.119 to create and $0.0095
+	// to read, so the 1h premium is $0.071 and avoiding one cold re-create
+	// saves $0.109. One worker reusing the prefix between 5 and 60 minutes
+	// later pays for it; a single run that then goes idle does not. Iterations
+	// inside one loop are seconds apart and never exceed either TTL.
+	CacheTTL string `json:"cache_ttl,omitempty"`
 	// LeanContext strips the operator's MCP servers, user-level settings,
 	// skills and agents from workers, and moves per-machine sections out of
 	// the system prompt. Workers keep the built-in tools and the project's
@@ -133,6 +142,14 @@ type MiddleTier struct {
 
 // SubagentTier: VirtualModel is the name tier-3 requests carry on the wire
 // ("roscoe/tier3"); the router rewrites it to Model on Provider.
+// TTL is the prompt-cache TTL to export, defaulting to claude's own "1h".
+func (m MiddleTier) TTL() string {
+	if m.CacheTTL == "" {
+		return "1h"
+	}
+	return m.CacheTTL
+}
+
 // Lean reports whether workers run with a stripped prompt prefix. Unset means
 // yes: an old config should get the cheaper default, not the expensive one.
 func (m MiddleTier) Lean() bool { return m.LeanContext == nil || *m.LeanContext }

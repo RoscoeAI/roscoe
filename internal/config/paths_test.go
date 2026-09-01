@@ -131,3 +131,21 @@ func TestValidateEffort(t *testing.T) {
 		t.Errorf("the error should list the valid values, got %v", errs[0])
 	}
 }
+
+func TestValidateCacheTTL(t *testing.T) {
+	for _, ttl := range []string{"", "1h", "5m"} {
+		c := Default()
+		c.Tiers.Middle.CacheTTL = ttl
+		if errs := c.Validate(); len(errs) > 0 {
+			t.Errorf("cache_ttl %q rejected: %v", ttl, errs)
+		}
+	}
+	c := Default()
+	c.Tiers.Middle.CacheTTL = "30m"
+	if errs := c.Validate(); len(errs) == 0 {
+		t.Error("an unsupported cache_ttl was accepted")
+	}
+	if got := Default().Tiers.Middle.TTL(); got != "1h" {
+		t.Errorf("unset cache_ttl = %q, want claude's own default 1h", got)
+	}
+}

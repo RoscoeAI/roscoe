@@ -212,6 +212,10 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 				"CLAUDE_CODE_OAUTH_TOKEN="+t.Token,
 			)
 		}
+		// The prefix is written once and read by every later round trip, so
+		// the TTL decides whether a second worker in the same hour re-pays
+		// for it. See MiddleTier.CacheTTL for the arithmetic.
+		env = append(env, "CLAUDE_CODE_PROMPT_CACHE_TTL="+mid.TTL())
 		env = append(env, "CLAUDE_CODE_SUBAGENT_MODEL="+sub.VirtualModel)
 		if sub.MapHaikuAlias {
 			env = append(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL="+sub.VirtualModel)
