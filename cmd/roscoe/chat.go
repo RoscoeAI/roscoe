@@ -116,8 +116,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	defer sc.Leave()
 	go watchResize(sc)
 	sc.Banner(cfg.Tiers.Middle.Model, harnessLabel, *dir)
-	sc.Printf("%sautonomy %d · subagents %s · %d wide%s", ansiFaint,
-		cfg.Autonomy.Level, cfg.Tiers.Subagents.Model, cfg.Tiers.Subagents.MaxConcurrent, ansiReset)
+	sc.Print(fleetLine(cfg))
 
 	// A resumed conversation should be visible, not just loaded: replay the
 	// tail so the operator picks up where they left off.
@@ -139,7 +138,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	}
 
 	for {
-		line, ok := keys.ReadLineOn(sc, "› ", history, comp)
+		line, ok := keys.ReadLineOn(sc, "› ", "", history, comp)
 		if !ok {
 			sc.Leave()
 			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
@@ -186,6 +185,10 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 					ansiDim, commandHelp[c], ansiReset)
 			}
 			sc.Printf("%sesc interrupts a running turn; up and down scroll%s", ansiFaint, ansiReset)
+			continue
+		case msg == "/settings":
+			runSettings(sc, keys, cfg, explicit)
+			harnessLabel = harnessOf(cfg)
 			continue
 		case msg == "/cost":
 			sc.Printf("%s%.4f USD across %d turns%s", ansiDim, spent, turns, ansiReset)
@@ -394,6 +397,7 @@ var commandHelp = map[string]string{
 	"/model":     "the model your workers run",
 	"/new":       "start a fresh session, leaving this one on disk",
 	"/session":   "the current session id, for resuming later",
+	"/settings":  "every tier's model and effort on one screen, arrows to change",
 	"/subagents": "how many cheap subagents a worker may run at once",
 }
 
@@ -526,6 +530,29 @@ func printConfigLevel(sc *screen, cfg *config.Config, prefix string) {
 	}
 }
 
+// fleetLine states all three tiers in one line, so what is running is never
+// something you have to go and look up.
+func fleetLine(cfg *config.Config) string {
+	effort := cfg.Tiers.Middle.Effort
+	if effort == "" {
+		effort = "default effort"
+	}
+	return fmt.Sprintf("%stier 1 %s · tier 2 %s %s · tier 3 %s %d wide · autonomy %d%s   %s/settings%s",
+		ansiFaint, cfg.Tiers.Main.Model,
+		cfg.Tiers.Middle.Model, effort,
+		shortModel(cfg.Tiers.Subagents.Model), cfg.Tiers.Subagents.MaxConcurrent,
+		cfg.Autonomy.Level, ansiReset, ansiDim, ansiReset)
+}
+
+// shortModel drops a vendor prefix for display: zai-org/GLM-5.3-Flash reads
+// as GLM-5.3-Flash.
+func shortModel(m string) string {
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		return m[i+1:]
+	}
+	return m
+}
+
 // commandArgs is what each command takes, appended to its name in /help.
 var commandArgs = map[string]string{
 	"/autonomy":  " 0-100",
@@ -538,7 +565,7 @@ var commandArgs = map[string]string{
 
 // commands are the slash commands offered in chat, in the order they
 // complete.
-var commands = []string{"/autonomy", "/config", "/cost", "/effort", "/exit", "/harness", "/help", "/model", "/new", "/session", "/subagents"}
+var commands = []string{"/autonomy", "/config", "/cost", "/effort", "/exit", "/harness", "/help", "/model", "/new", "/session", "/settings", "/subagents"}
 
 func matching(candidates []string, prefix string) []string {
 	if prefix == "" {

@@ -40,6 +40,11 @@ type screen struct {
 
 	lines  []string // display lines, pre-wrapped to the terminal width
 	offset int      // rows scrolled back; 0 follows new output
+
+	// overlay, when non-nil, is painted over the viewport instead of the
+	// scrollback: a panel that survives resizes and prompt redraws without
+	// disturbing the conversation underneath.
+	overlay []string
 }
 
 func newScreen() *screen {
@@ -160,20 +165,48 @@ func (s *screen) SetPrompt(prompt, input, hint, note string) {
 	s.drawBoxLocked()
 }
 
+// Overlay paints lines over the viewport until called with nil, which
+// restores the conversation. Output arriving underneath is buffered, not lost.
+func (s *screen) Overlay(lines []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overlay = lines
+	s.repaintLocked()
+}
+
+// ViewHeight is how many rows an overlay may use.
+func (s *screen) ViewHeight() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.viewHeight()
+}
+
+// Cols is the terminal width.
+func (s *screen) Cols() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cols
+}
+
 func (s *screen) repaintLocked() {
 	if !s.active {
 		return
 	}
 	h := s.viewHeight()
-	end := len(s.lines) - s.offset
-	if end < 0 {
-		end = 0
+	view := s.overlay
+	if view == nil {
+		end := len(s.lines) - s.offset
+		if end < 0 {
+			end = 0
+		}
+		start := end - h
+		if start < 0 {
+			start = 0
+		}
+		view = s.lines[start:end]
+	} else if len(view) > h {
+		view = view[:h]
 	}
-	start := end - h
-	if start < 0 {
-		start = 0
-	}
-	view := s.lines[start:end]
 
 	var b strings.Builder
 	b.WriteString(ansiHide)

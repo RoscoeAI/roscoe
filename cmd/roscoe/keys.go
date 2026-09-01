@@ -99,12 +99,13 @@ func (k *keyReader) ReadLine(promptStr string) (string, bool) {
 	return "", false
 }
 
-// ReadLineOn collects a line into the pinned prompt of a screen. Enter
-// submits; up/down scroll the conversation; tab completes a slash command;
-// Esc or Ctrl+C abandon the line (ok=false). history is the previous inputs,
-// oldest first, walked with up/down once the line is empty.
-func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string, comp *completer) (string, bool) {
-	var b []byte
+// ReadLineOn collects a line into the pinned prompt of a screen, starting
+// from initial (empty for a fresh line). Enter submits; up/down scroll the
+// conversation; tab completes a slash command; Esc or Ctrl+C abandon the line
+// (ok=false). history is the previous inputs, oldest first, walked with
+// up/down once the line is empty.
+func (k *keyReader) ReadLineOn(sc *screen, promptStr, initial string, history []string, comp *completer) (string, bool) {
+	b := []byte(initial)
 	hist := len(history) // index into history; len == "current, unsaved line"
 	redraw := func() {
 		sc.SetPrompt(promptStr, string(b), comp.hintFor(string(b)), comp.noteFor(string(b)))
@@ -173,6 +174,28 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string, c
 		redraw()
 	}
 	return "", false
+}
+
+// NextKey blocks for one keypress and names it: "up", "down", "left",
+// "right", "pgup", "pgdn", "enter", "esc", "tab", "ctrl-c", "eof", or the
+// character itself. Unrecognised escape sequences come back as "".
+func (k *keyReader) NextKey() string {
+	b, ok := <-k.events
+	if !ok {
+		return "eof"
+	}
+	switch {
+	case b == 0x1b:
+		return k.escapeKey()
+	case b == '\r' || b == '\n':
+		return "enter"
+	case b == '\t':
+		return "tab"
+	case b == 0x03:
+		return "ctrl-c"
+	default:
+		return string(rune(b))
+	}
 }
 
 // completer supplies candidate completions for the token being typed.

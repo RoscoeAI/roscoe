@@ -1,0 +1,259 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"roscoe.sh/roscoe/internal/config"
+)
+
+// settingRow is one line of the settings panel. A heading groups the rows
+// under it. A row with a path can be edited; one without shows why not, so
+// the surface stays honest about which knobs actually exist.
+type settingRow struct {
+	heading string
+	label   string
+	path    string
+	// raw is the stored value, which is what an edit starts from; display is
+	// what the panel shows and may read better ("8 at once" for 8). Held here
+	// rather than fetched, because a setting left at its zero value is absent
+	// from the marshalled config and could not be read back.
+	raw     string
+	display string
+	why     string
+	choices []string
+}
+
+func (r settingRow) shown() string {
+	if r.display != "" {
+		return r.display
+	}
+	return r.raw
+}
+
+func (r settingRow) editable() bool { return r.path != "" }
+
+// settingsRows is the whole fleet on one surface: every tier's model,
+// provider, and effort, in the order the work flows through them.
+func settingsRows(cfg *config.Config) []settingRow {
+	providers := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		providers = append(providers, name)
+	}
+	models := modelChoices(cfg)
+
+	return []settingRow{
+		{heading: "tier 1   your session, the one you talk to"},
+		{label: "model", path: "tiers.main.model", raw: cfg.Tiers.Main.Model, choices: models},
+		{label: "provider", path: "tiers.main.provider", raw: cfg.Tiers.Main.Provider, choices: providers},
+		{label: "effort", why: "yours to set, not roscoe's: this is your own claude session"},
+
+		{heading: "tier 2   workers, one spawned per task"},
+		{label: "model", path: "tiers.middle.model", raw: cfg.Tiers.Middle.Model, choices: models},
+		{label: "provider", path: "tiers.middle.provider", raw: cfg.Tiers.Middle.Provider, choices: providers},
+		{label: "effort", path: "tiers.middle.effort", raw: cfg.Tiers.Middle.Effort, display: effortOf(cfg), choices: config.EffortLevels()},
+		{label: "harness", path: "tiers.middle.harness", raw: harnessOf(cfg), choices: []string{"claude", "codex"}},
+
+		{heading: "tier 3   the swarm each worker fans out to"},
+		{label: "model", path: "tiers.subagents.model", raw: cfg.Tiers.Subagents.Model, choices: models},
+		{label: "provider", path: "tiers.subagents.provider", raw: cfg.Tiers.Subagents.Provider, choices: providers},
+		{label: "effort", why: "claude code has no per-subagent effort knob; tier 2's applies"},
+		{label: "width", path: "tiers.subagents.max_concurrent",
+			raw:     fmt.Sprintf("%d", cfg.Tiers.Subagents.MaxConcurrent),
+			display: fmt.Sprintf("%d at once", cfg.Tiers.Subagents.MaxConcurrent), choices: []string{"1", "2", "4", "8", "12", "16", "24"}},
+
+		{heading: "fleet"},
+		{label: "autonomy", path: "autonomy.level",
+			raw: fmt.Sprintf("%d", cfg.Autonomy.Level), choices: []string{"0", "25", "50", "75", "90", "100"}},
+	}
+}
+
+// effortOf names the empty case rather than showing a blank cell.
+func effortOf(cfg *config.Config) string {
+	if e := cfg.Tiers.Middle.Effort; e != "" {
+		return e
+	}
+	return "claude's default"
+}
+
+func harnessOf(cfg *config.Config) string {
+	if h := cfg.Tiers.Middle.Harness; h != "" {
+		return h
+	}
+	return "claude"
+}
+
+// renderSettings paints the panel, windowed so the selected row stays on
+// screen on a short terminal.
+func renderSettings(rows []settingRow, sel, height int) []string {
+	width := 0
+	for _, r := range rows {
+		if n := len(r.label); n > width {
+			width = n
+		}
+	}
+
+	out := make([]string, 0, len(rows)+6)
+	lineOf := make([]int, len(rows))
+	for i, r := range rows {
+		if r.heading != "" {
+			if i > 0 {
+				out = append(out, "")
+			}
+			lineOf[i] = len(out)
+			out = append(out, "  "+ansiFaint+r.heading+ansiReset)
+			continue
+		}
+		lineOf[i] = len(out)
+		marker := "    "
+		label := ansiDim + r.label + ansiReset
+		if i == sel {
+			marker = "  " + ansiGreen + "› " + ansiReset
+			label = ansiGreen + r.label + ansiReset
+		}
+		value := r.shown()
+		if !r.editable() {
+			value = ansiFaint + r.why + ansiReset
+		}
+		pad := width - len(r.label)
+		if pad < 0 {
+			pad = 0
+		}
+		out = append(out, marker+label+strings.Repeat(" ", pad)+"   "+value)
+	}
+
+	// Keep the selection in view rather than clipping the tail.
+	if len(out) > height {
+		start := lineOf[sel] - height/2
+		if start < 0 {
+			start = 0
+		}
+		if start+height > len(out) {
+			start = len(out) - height
+		}
+		out = out[start : start+height]
+	}
+	return out
+}
+
+// nextSelectable walks from sel in direction step to the next editable row,
+// stopping at the ends rather than wrapping.
+func nextSelectable(rows []settingRow, sel, step int) int {
+	for i := sel + step; i >= 0 && i < len(rows); i += step {
+		if rows[i].editable() {
+			return i
+		}
+	}
+	return sel
+}
+
+func firstSelectable(rows []settingRow) int {
+	for i, r := range rows {
+		if r.editable() {
+			return i
+		}
+	}
+	return 0
+}
+
+// runSettings takes over the viewport with the settings panel: up and down
+// move, enter edits the selected value, esc closes. Every edit is validated
+// and persisted before the panel redraws.
+func runSettings(sc *screen, keys *keyReader, cfg *config.Config, explicit string) {
+	rows := settingsRows(cfg)
+	sel := firstSelectable(rows)
+	defer sc.Overlay(nil)
+
+	for {
+		sc.Overlay(renderSettings(rows, sel, sc.ViewHeight()))
+		sc.SetPrompt("", "", "  ↑↓ move · ←→ change · enter type · esc close", noteForRow(rows[sel]))
+
+		key := keys.NextKey()
+		switch key {
+		case "up":
+			sel = nextSelectable(rows, sel, -1)
+		case "down":
+			sel = nextSelectable(rows, sel, 1)
+		case "left", "right":
+			// Most of these are short lists, so stepping through them beats
+			// retyping a value.
+			row := rows[sel]
+			step := 1
+			if key == "left" {
+				step = -1
+			}
+			if next := cycleChoice(row.choices, row.raw, step); next != "" {
+				applySetting(sc, cfg, explicit, row, next)
+				rows = settingsRows(cfg)
+			}
+		case "enter":
+			row := rows[sel]
+			comp := &completer{candidates: func(input string) []string {
+				return matching(row.choices, strings.TrimSpace(input))
+			}}
+			val, ok := keys.ReadLineOn(sc, row.label+" = ", row.raw, nil, comp)
+			if ok {
+				applySetting(sc, cfg, explicit, row, strings.TrimSpace(val))
+			}
+			rows = settingsRows(cfg)
+		case "esc", "ctrl-c", "eof":
+			sc.SetPrompt("", "", "", "")
+			return
+		}
+	}
+}
+
+func noteForRow(row settingRow) string {
+	if !row.editable() {
+		return row.label + ": " + row.why
+	}
+	if d := config.Describe(row.path); d != "" {
+		return row.path + ": " + d
+	}
+	return row.path
+}
+
+// applySetting validates in memory before writing, and puts the old value
+// back if the new one would make the config invalid.
+func applySetting(sc *screen, cfg *config.Config, explicit string, row settingRow, val string) {
+	if val == "" {
+		return
+	}
+	old := row.raw
+	if err := cfg.SetPath(row.path, val); err != nil {
+		sc.Printf("%s%v%s", ansiDim, err, ansiReset)
+		return
+	}
+	if errs := cfg.Validate(); len(errs) > 0 {
+		_ = cfg.SetPath(row.path, old)
+		sc.Printf("%s%v%s", ansiDim, errs[0], ansiReset)
+		return
+	}
+	persist(sc, explicit, row.path, val)
+}
+
+// cycleChoice returns the choice step positions from current, clamped at the
+// ends. An empty result means there is nothing to cycle.
+func cycleChoice(choices []string, current string, step int) string {
+	if len(choices) == 0 {
+		return ""
+	}
+	at := -1
+	for i, c := range choices {
+		if c == current {
+			at = i
+			break
+		}
+	}
+	if at < 0 { // current value is not in the list; enter it at either end
+		if step > 0 {
+			return choices[0]
+		}
+		return choices[len(choices)-1]
+	}
+	next := at + step
+	if next < 0 || next >= len(choices) {
+		return ""
+	}
+	return choices[next]
+}

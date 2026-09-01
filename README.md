@@ -64,10 +64,37 @@ precedence is flag > `ROSCOE_*` env > `roscoe.json` > defaults. See
 [`SPEC.md`](SPEC.md) for the package contracts.
 
 Nobody memorizes a config schema, so in `roscoe chat` the settings are
-something you walk rather than recall. `/config` lists the top-level keys with
-a line on what each one is; naming one goes a level deeper; tab completes and
-descends; and the line above the prompt describes whatever you are pointing at
-as you type.
+something you look at rather than recall. `/settings` puts all three tiers on
+one screen, each with its model, provider, and effort, and says plainly where
+a knob does not exist rather than leaving a gap:
+
+```
+  tier 1   your session, the one you talk to
+  › model      opus
+    provider   anthropic
+    effort     yours to set, not roscoe's: this is your own claude session
+
+  tier 2   workers, one spawned per task
+    model      sonnet
+    provider   anthropic
+    effort     ultracode
+    harness    claude
+
+  tier 3   the swarm each worker fans out to
+    model      zai-org/GLM-5.3-Flash
+    provider   deepinfra
+    effort     claude code has no per-subagent effort knob; tier 2's applies
+    width      8 at once
+```
+
+Up and down move, left and right step through a setting's values, enter types
+one in, esc closes. Every change is validated and written to `roscoe.json` as
+you make it.
+
+For everything outside those tiers there is `/config`, which walks the whole
+schema the same way: it lists the top-level keys with a line on what each one
+is, naming one goes a level deeper, tab completes and descends, and the line
+above the prompt describes whatever you are pointing at as you type.
 
 ```
 /config                      accounts, providers, nodes, tiers, autonomy, …
