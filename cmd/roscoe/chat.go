@@ -96,6 +96,36 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	var turns int
 	var history []string
 
+	// Completion knowledge lives here: command names, then per-command
+	// arguments (config paths come from the config schema itself).
+	commands := []string{"/autonomy", "/config", "/cost", "/exit", "/harness", "/help", "/model", "/new", "/session", "/subagents"}
+	comp := &completer{candidates: func(input string) []string {
+		fields := strings.Fields(input)
+		token := currentToken(input)
+		if !strings.HasPrefix(strings.TrimSpace(input), "/") {
+			return nil
+		}
+		if len(fields) <= 1 && token != "" { // still naming the command
+			return matching(commands, token)
+		}
+		if len(fields) == 0 {
+			return commands
+		}
+		switch fields[0] {
+		case "/config":
+			return matching(cfg.Paths(), token)
+		case "/harness":
+			return matching([]string{"claude", "codex"}, token)
+		case "/model":
+			return matching(modelChoices(cfg), token)
+		case "/autonomy":
+			return matching([]string{"0", "25", "50", "75", "90", "100"}, token)
+		case "/subagents":
+			return matching([]string{"1", "2", "4", "8", "12", "16", "24"}, token)
+		}
+		return nil
+	}}
+
 	keys, restore, err := newKeyReader()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "roscoe chat: %v\n", err)
@@ -135,7 +165,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	}
 
 	for {
-		line, ok := keys.ReadLineOn(sc, "› ", history)
+		line, ok := keys.ReadLineOn(sc, "› ", history, comp)
 		if !ok {
 			sc.Leave()
 			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
@@ -348,4 +378,39 @@ func persist(sc *screen, explicit, path, value string) {
 		return
 	}
 	sc.Printf("%s%s = %s%s", ansiGreen, path, value, ansiReset)
+}
+
+// matching returns the candidates carrying prefix, in order.
+func matching(candidates []string, prefix string) []string {
+	if prefix == "" {
+		return candidates
+	}
+	var out []string
+	for _, c := range candidates {
+		if strings.HasPrefix(c, prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// modelChoices offers the aliases claude understands plus whatever this
+// config already names, so switching back is a tab away.
+func modelChoices(cfg *config.Config) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(v string) {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, v := range []string{"sonnet", "opus", "haiku"} {
+		add(v)
+	}
+	add(cfg.Tiers.Subagents.VirtualModel)
+	add(cfg.Tiers.Subagents.Model)
+	add(cfg.Tiers.Middle.Model)
+	add(cfg.Tiers.Main.Model)
+	return out
 }

@@ -103,10 +103,10 @@ func (k *keyReader) ReadLine(promptStr string) (string, bool) {
 // submits; up/down scroll the conversation; tab completes a slash command;
 // Esc or Ctrl+C abandon the line (ok=false). history is the previous inputs,
 // oldest first, walked with up/down once the line is empty.
-func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string) (string, bool) {
+func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string, comp *completer) (string, bool) {
 	var b []byte
 	hist := len(history) // index into history; len == "current, unsaved line"
-	redraw := func() { sc.SetPrompt(promptStr, string(b), completionHint(string(b))) }
+	redraw := func() { sc.SetPrompt(promptStr, string(b), comp.hintFor(string(b))) }
 	redraw()
 
 	for c := range k.events {
@@ -122,7 +122,7 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string) (
 			}
 
 		case c == '\t':
-			if done := completeCommand(string(b)); done != "" {
+			if done := comp.completeOn(string(b)); done != "" {
 				b = []byte(done)
 			}
 
@@ -173,67 +173,96 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr string, history []string) (
 	return "", false
 }
 
-// chatCommands is the slash-command surface, used for hints and completion.
-var chatCommands = []string{
-	"/autonomy", "/config", "/cost", "/exit", "/harness",
-	"/help", "/model", "/new", "/session", "/subagents",
+// completer supplies candidate completions for the token being typed.
+// Chat owns the knowledge (commands, config paths, provider values); the
+// line editor only renders and applies them.
+type completer struct {
+	candidates func(input string) []string
 }
 
-// completionHint suggests the rest of a slash command as ghost text, or lists
-// the commands once "/" is typed.
-func completionHint(input string) string {
-	if input == "" || !strings.HasPrefix(input, "/") || strings.Contains(input, " ") {
+// suggestions returns the candidates for the current token, plus that token.
+func (c *completer) suggestions(input string) ([]string, string) {
+	if c == nil || c.candidates == nil {
+		return nil, ""
+	}
+	token := currentToken(input)
+	return c.candidates(input), token
+}
+
+// currentToken is the word being typed: empty when the input ends in a space
+// (a new argument is starting).
+func currentToken(input string) string {
+	if input == "" || strings.HasSuffix(input, " ") {
 		return ""
 	}
-	if input == "/" {
-		return strings.Join(trimPrefixes(chatCommands), " ")
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return ""
 	}
-	var matches []string
-	for _, c := range chatCommands {
-		if strings.HasPrefix(c, input) {
-			matches = append(matches, c)
+	return fields[len(fields)-1]
+}
+
+// hintFor renders ghost text after the cursor: the completion of a single
+// match, or a sample of the alternatives.
+func (c *completer) hintFor(input string) string {
+	cands, token := c.suggestions(input)
+	if len(cands) == 0 {
+		return ""
+	}
+	if len(cands) == 1 {
+		return strings.TrimPrefix(cands[0], token) + "  ⇥"
+	}
+	shown := cands
+	const max = 6
+	more := ""
+	if len(shown) > max {
+		shown, more = shown[:max], fmt.Sprintf(" +%d", len(cands)-max)
+	}
+	return "  " + strings.Join(shown, " ") + more
+}
+
+// completeOn applies a tab press: the single match, or the longest common
+// prefix shared by all matches.
+func (c *completer) completeOn(input string) string {
+	cands, token := c.suggestions(input)
+	if len(cands) == 0 {
+		return ""
+	}
+	replacement := cands[0]
+	if len(cands) > 1 {
+		replacement = commonPrefix(cands)
+		if replacement == token {
+			return ""
 		}
 	}
-	switch len(matches) {
-	case 0:
-		return ""
-	case 1:
-		return matches[0][len(input):] + "  ⇥"
-	default:
-		return "  " + strings.Join(matches, " ")
-	}
-}
-
-// completeCommand returns the completed command for a tab press, or "" when
-// there is nothing unambiguous to complete.
-func completeCommand(input string) string {
-	if !strings.HasPrefix(input, "/") || strings.Contains(input, " ") {
-		return ""
-	}
-	var matches []string
-	for _, c := range chatCommands {
-		if strings.HasPrefix(c, input) {
-			matches = append(matches, c)
-		}
-	}
-	if len(matches) == 1 {
-		return matches[0] + " "
-	}
-	return ""
-}
-
-func trimPrefixes(cmds []string) []string {
-	out := make([]string, 0, len(cmds))
-	for _, c := range cmds {
-		out = append(out, strings.TrimPrefix(c, "/"))
+	base := strings.TrimSuffix(input, token)
+	out := base + replacement
+	if len(cands) == 1 {
+		out += " "
 	}
 	return out
 }
 
+func commonPrefix(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	prefix := items[0]
+	for _, it := range items[1:] {
+		for !strings.HasPrefix(it, prefix) {
+			prefix = prefix[:len(prefix)-1]
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
+}
+
 // escapeKey resolves the Esc just read into a named key. A bare Esc — nothing
 // following within a beat — returns "esc"; recognised sequences return "up",
-// "down", "pgup", "pgdn", "left", "right", "home", "end"; anything else
-// returns "" after being swallowed.
+// "down", "pgup", "pgdn", "left", "right"; anything else returns "" after
+// being swallowed, so stray sequences never reach the line.
 func (k *keyReader) escapeKey() string {
 	var intro byte
 	select {
@@ -255,7 +284,7 @@ func (k *keyReader) escapeKey() string {
 			if !ok {
 				return ""
 			}
-			if f >= 0x40 && f <= 0x7e { // final byte
+			if f >= 0x40 && f <= 0x7e { // final byte of the sequence
 				switch f {
 				case 'A':
 					return "up"
@@ -265,10 +294,6 @@ func (k *keyReader) escapeKey() string {
 					return "right"
 				case 'D':
 					return "left"
-				case 'H':
-					return "home"
-				case 'F':
-					return "end"
 				case '~':
 					switch string(seq) {
 					case "5":

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -388,4 +389,43 @@ func step(cur any, seg, sofar string) (any, error) {
 	default:
 		return nil, fmt.Errorf("%q: value is not an object or array", sofar)
 	}
+}
+
+// Paths returns every dotted path in this config, leaves and containers
+// alike, so a UI can complete them. Derived from the marshalled config, so
+// map keys (providers.deepinfra.base_url) and array indices (nodes.0.ssh)
+// are real rather than guessed.
+func (c *Config) Paths() []string {
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return nil
+	}
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return nil
+	}
+	var out []string
+	var walk func(prefix string, node any)
+	walk = func(prefix string, node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			for k, child := range v {
+				p := k
+				if prefix != "" {
+					p = prefix + "." + k
+				}
+				out = append(out, p)
+				walk(p, child)
+			}
+		case []any:
+			for i, child := range v {
+				p := fmt.Sprintf("%s.%d", prefix, i)
+				out = append(out, p)
+				walk(p, child)
+			}
+		}
+	}
+	walk("", tree)
+	sort.Strings(out)
+	return out
 }
