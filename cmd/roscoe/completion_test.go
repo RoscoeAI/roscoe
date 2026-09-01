@@ -125,3 +125,51 @@ func TestEveryCommandHasHelp(t *testing.T) {
 		}
 	}
 }
+
+// A mistyped slash command must never become a prompt. Falling through spawns
+// a worker, costs a turn, and answers with Claude Code's own "unknown command"
+// text, which reads as though roscoe said it.
+func TestNearestCommand(t *testing.T) {
+	cases := map[string]string{
+		"/setting":  "/settings", // the real one, hit in a live session
+		"/settigns": "/settings",
+		"/mode":     "/model",
+		"/effot":    "/effort",
+		"/conifg":   "/config",
+		"/halp":     "/help",
+		"/set":      "/settings", // prefix match
+		"/hel":      "/help",
+	}
+	for typed, want := range cases {
+		if got := nearestCommand(typed); got != want {
+			t.Errorf("nearestCommand(%q) = %q, want %q", typed, got, want)
+		}
+	}
+	// A wrong suggestion is worse than none.
+	for _, typed := range []string{"/xyzzy", "/deploy-everything-now"} {
+		if got := nearestCommand(typed); got != "" {
+			t.Errorf("nearestCommand(%q) = %q, want no guess", typed, got)
+		}
+	}
+	// Every real command suggests itself.
+	for _, c := range commands {
+		if got := nearestCommand(c); got != c {
+			t.Errorf("nearestCommand(%q) = %q; a real command must match itself", c, got)
+		}
+	}
+}
+
+func TestEditDistance(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"", "", 0}, {"a", "", 1}, {"", "abc", 3},
+		{"kitten", "sitting", 3}, {"same", "same", 0}, {"ab", "ba", 2},
+	}
+	for _, tc := range cases {
+		if got := editDistance(tc.a, tc.b); got != tc.want {
+			t.Errorf("editDistance(%q,%q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

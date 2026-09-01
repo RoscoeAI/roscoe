@@ -292,6 +292,19 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			continue
 		}
 
+		// A mistyped slash command must not become a prompt. Falling through
+		// spawns a worker, costs a turn, and answers with Claude Code's own
+		// "unknown command" text, which reads as though roscoe said it.
+		if strings.HasPrefix(msg, "/") {
+			sc.Printf("%sunknown command %s%s", ansiDim, strings.Fields(msg)[0], ansiReset)
+			if near := nearestCommand(strings.Fields(msg)[0]); near != "" {
+				sc.Printf("%sdid you mean %s%s%s", ansiDim, ansiGreen, near, ansiReset)
+			} else {
+				sc.Printf("%s/help lists them%s", ansiFaint, ansiReset)
+			}
+			continue
+		}
+
 		turnCtx, cancelTurn := context.WithCancel(ctx)
 		var escPressed atomic.Bool
 		go func() {
@@ -384,6 +397,54 @@ func persist(sc *screen, explicit, path, value string) {
 }
 
 // matching returns the candidates carrying prefix, in order.
+// nearestCommand finds the closest known command to a mistyped one: a prefix
+// match first, then one within a small edit distance. It returns "" rather
+// than guess wildly, because a wrong suggestion is worse than none.
+func nearestCommand(typed string) string {
+	best, bestD := "", 3 // no suggestion beyond two edits
+	for _, c := range commands {
+		if strings.HasPrefix(c, typed) || strings.HasPrefix(typed, c) {
+			return c
+		}
+		if d := editDistance(typed, c); d < bestD {
+			best, bestD = c, d
+		}
+	}
+	return best
+}
+
+// editDistance is Levenshtein over two short strings, iterative with one row.
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	prev := make([]int, len(br)+1)
+	cur := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		cur[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 1
+			if ar[i-1] == br[j-1] {
+				cost = 0
+			}
+			cur[j] = min3(cur[j-1]+1, prev[j]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(br)]
+}
+
+func min3(a, b, c int) int {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		a = c
+	}
+	return a
+}
+
 // commandHelp is the one-line description shown above the input box while a
 // slash command is being typed.
 var commandHelp = map[string]string{
