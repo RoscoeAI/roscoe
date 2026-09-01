@@ -120,6 +120,11 @@ func Default() *Config {
 // one does not), and adds workflow planning on top of xhigh reasoning.
 var effortLevels = []string{"low", "medium", "high", "xhigh", "max", "ultracode"}
 
+// EffortLevels returns the accepted --effort values, cheapest first.
+func EffortLevels() []string {
+	return append([]string(nil), effortLevels...)
+}
+
 var validEffort = func() map[string]bool {
 	m := make(map[string]bool, len(effortLevels))
 	for _, e := range effortLevels {

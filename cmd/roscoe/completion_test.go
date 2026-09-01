@@ -92,10 +92,31 @@ func TestHintIsRelativeToLevel(t *testing.T) {
 	}
 }
 
+func TestEffortCompletion(t *testing.T) {
+	comp := newChatCompleter(config.Default())
+	got := comp.candidates("/effort ")
+	if strings.Join(got, " ") != strings.Join(config.EffortLevels(), " ") {
+		t.Errorf("/effort offered %v, want %v", got, config.EffortLevels())
+	}
+	if !contains(got, "ultracode") {
+		t.Error("ultracode must be offered; it is the default and claude --help omits it")
+	}
+}
+
 func TestEveryCommandHasHelp(t *testing.T) {
 	for _, c := range commands {
 		if commandHelp[c] == "" {
 			t.Errorf("command %s has no one-line help", c)
+		}
+	}
+	for _, c := range commands {
+		if _, ok := commandHelp[c]; !ok {
+			t.Errorf("command %s missing from commandHelp", c)
+		}
+	}
+	for c := range commandArgs {
+		if !contains(commands, c) {
+			t.Errorf("args for %s, which is not a command", c)
 		}
 	}
 	for c := range commandHelp {
@@ -103,13 +124,4 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			t.Errorf("help for %s, which is not a command", c)
 		}
 	}
-}
-
-func contains(items []string, want string) bool {
-	for _, it := range items {
-		if it == want {
-			return true
-		}
-	}
-	return false
 }

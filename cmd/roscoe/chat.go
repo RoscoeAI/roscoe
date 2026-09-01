@@ -173,19 +173,19 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			sc.Print(ansiDim + "started a fresh session" + ansiReset)
 			continue
 		case msg == "/help":
-			for _, l := range []string{
-				"/model <name>        middle-tier model for this fleet",
-				"/harness claude|codex worker harness",
-				"/autonomy 0-100      how much the quorum absorbs before texting you",
-				"/subagents <n>       how many subagents each worker may run",
-				"/config <path> [v]   read or set any roscoe.json value",
-				"/cost                what this chat has spent",
-				"/session             session id, to resume later",
-				"/new                 start a fresh session",
-				"/exit                leave (esc interrupts a running turn)",
-			} {
-				sc.Print(ansiDim + l + ansiReset)
+			// Same text the prompt shows while you type, so the two cannot
+			// drift apart.
+			width := 0
+			for _, c := range commands {
+				if n := len(c + commandArgs[c]); n > width {
+					width = n
+				}
 			}
+			for _, c := range commands {
+				sc.Printf("  %s%-*s%s  %s%s%s", ansiGreen, width, c+commandArgs[c], ansiReset,
+					ansiDim, commandHelp[c], ansiReset)
+			}
+			sc.Printf("%sesc interrupts a running turn; up and down scroll%s", ansiFaint, ansiReset)
 			continue
 		case msg == "/cost":
 			sc.Printf("%s%.4f USD across %d turns%s", ansiDim, spent, turns, ansiReset)
@@ -198,6 +198,24 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			}
 			cfg.Tiers.Middle.Model = arg
 			persist(sc, explicit, "tiers.middle.model", arg)
+			continue
+		case strings.HasPrefix(msg, "/effort"):
+			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/effort"))
+			if arg == "" {
+				cur := cfg.Tiers.Middle.Effort
+				if cur == "" {
+					cur = "claude's default"
+				}
+				sc.Printf("%seffort %s · one of %s%s", ansiDim, cur,
+					strings.Join(config.EffortLevels(), ", "), ansiReset)
+				continue
+			}
+			if !contains(config.EffortLevels(), arg) {
+				sc.Printf("%susage: /effort %s%s", ansiDim, strings.Join(config.EffortLevels(), "|"), ansiReset)
+				continue
+			}
+			cfg.Tiers.Middle.Effort = arg
+			persist(sc, explicit, "tiers.middle.effort", arg)
 			continue
 		case strings.HasPrefix(msg, "/harness"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/harness"))
@@ -369,6 +387,7 @@ var commandHelp = map[string]string{
 	"/autonomy":  "0-100; how much roscoe decides without asking you",
 	"/config":    "read or set any setting by path; tab walks down a level",
 	"/cost":      "what this chat has spent so far",
+	"/effort":    "worker reasoning; ultracode plans a workflow per task and fans out",
 	"/exit":      "leave the chat; the session keeps its id",
 	"/harness":   "which CLI the workers run: claude or codex",
 	"/help":      "the commands, with what each one does",
@@ -376,6 +395,15 @@ var commandHelp = map[string]string{
 	"/new":       "start a fresh session, leaving this one on disk",
 	"/session":   "the current session id, for resuming later",
 	"/subagents": "how many cheap subagents a worker may run at once",
+}
+
+func contains(items []string, want string) bool {
+	for _, it := range items {
+		if it == want {
+			return true
+		}
+	}
+	return false
 }
 
 // parentPath is the dotted path one level up: "tiers.middle.effort" ->
@@ -412,6 +440,8 @@ func newChatCompleter(cfg *config.Config) *completer {
 				return matching(cfg.ChildPaths(parentPath(token)), token)
 			case "/harness":
 				return matching([]string{"claude", "codex"}, token)
+			case "/effort":
+				return matching(config.EffortLevels(), token)
 			case "/model":
 				return matching(modelChoices(cfg), token)
 			case "/autonomy":
@@ -496,9 +526,19 @@ func printConfigLevel(sc *screen, cfg *config.Config, prefix string) {
 	}
 }
 
+// commandArgs is what each command takes, appended to its name in /help.
+var commandArgs = map[string]string{
+	"/autonomy":  " 0-100",
+	"/config":    " <path> [value]",
+	"/effort":    " <level>",
+	"/harness":   " claude|codex",
+	"/model":     " <name>",
+	"/subagents": " <n>",
+}
+
 // commands are the slash commands offered in chat, in the order they
 // complete.
-var commands = []string{"/autonomy", "/config", "/cost", "/exit", "/harness", "/help", "/model", "/new", "/session", "/subagents"}
+var commands = []string{"/autonomy", "/config", "/cost", "/effort", "/exit", "/harness", "/help", "/model", "/new", "/session", "/subagents"}
 
 func matching(candidates []string, prefix string) []string {
 	if prefix == "" {

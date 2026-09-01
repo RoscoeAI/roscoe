@@ -26,7 +26,7 @@ conversation, the controls, the session handling.
 | Replay history on resume | yes | **yes** | last exchanges reprinted above the prompt |
 | Tools (read/edit/bash/search) | yes | **yes** | inherited; the worker is Claude Code |
 | Subagents | yes | **yes, cheaper** | routed to GLM-5.3-Flash, 8 wide by default |
-| Slash settings | yes | **yes, deeper** | `/model /harness /autonomy /subagents /config /cost /session /new /exit`; `/config` walks the whole schema a level at a time, describing each setting as you type |
+| Slash settings | yes | **yes, deeper** | `/model /effort /harness /autonomy /subagents /config /cost /session /new /exit`; `/config` walks the whole schema a level at a time, describing each setting as you type |
 | Cost visibility | yes | **yes** | per turn and running total |
 | Your auth and billing | yes | **yes** | runs under your own login |
 | Web search and fetch | yes | **yes** | in the default allowed tools |
