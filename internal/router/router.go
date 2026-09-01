@@ -53,6 +53,8 @@ type Router struct {
 	subProv     config.Provider
 	defProvName string
 	defProv     config.Provider
+
+	totals Totals
 }
 
 // New validates the routing config and binds the listen address.
@@ -202,6 +204,10 @@ type logEntry struct {
 	LatencyMS int64  `json:"latency_ms"`
 	BytesIn   int    `json:"bytes_in"`
 	BytesOut  int64  `json:"bytes_out"`
+	// Usage and CostUSD are what the upstream reported. Absent when it said
+	// nothing, which is different from zero.
+	Usage   *Usage  `json:"usage,omitempty"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 func (rt *Router) log(e logEntry) {
@@ -308,9 +314,20 @@ func (rt *Router) handleProxy(w http.ResponseWriter, req *http.Request) {
 		fl.Flush()
 	}
 	fw := &flushWriter{w: w, f: fl}
-	io.Copy(fw, resp.Body) // an error here means a broken peer; nothing left to send
+	tap := &usageTap{next: fw}
+	io.Copy(tap, resp.Body) // an error here means a broken peer; nothing left to send
 	e.BytesOut = fw.n
+	if u, ok := tap.Usage(); ok {
+		cost := u.Cost(prov.PricingPerMtok)
+		e.Usage, e.CostUSD = &u, cost
+		rt.totals.add(provName, u, cost)
+	}
 }
+
+// Totals reports what has crossed the router per upstream. Without this the
+// fleet can only see what a worker charges itself; everything its tier-3
+// subagents spend goes to another provider entirely and is invisible.
+func (rt *Router) Totals() map[string]Total { return rt.totals.Snapshot() }
 
 // outboundHeaders builds the upstream header set per the provider's auth mode.
 // Only the allowlisted headers ever cross the router.
