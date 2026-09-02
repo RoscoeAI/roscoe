@@ -220,6 +220,7 @@ roscoe node                      # what is on each machine, and what it needs
 roscoe deploy                    # install roscoe there, pinned to this version, and push roscoe.json
 roscoe deploy --node studio --claude --env   # one node; also install Claude Code and push the env file
 ssh -t studio-ts claude auth login           # the one step deploy cannot do for you
+roscoe run --node studio "port the tests"    # run a task there; its stream and your keys pass through ssh
 ```
 
 `node` says `ready` or `needs roscoe, config, claude, env`, and its last line
@@ -227,6 +228,13 @@ is the one command that gets the fleet closer. `deploy` pins the install to
 the version you are running (`ROSCOE_VERSION` in the installer), so nodes never
 disagree about what roscoe is. The env file is your API keys and only moves
 with `--env`; it lands with mode 600.
+
+`run --node` probes the node first and refuses in one line if it is not
+ready, naming the fix. The task runs in `~/.roscoe/work/<task-id>` on the
+node unless `--dir` names a checkout there; its ledger and session stay on
+the node. `claude auth status` is what the table trusts for login, and it is
+Claude Code's own belief: a credential that has expired reads as logged in
+until its first use, which is when Claude Code discovers it and clears it.
 
 ## Status
 
@@ -240,8 +248,9 @@ for now: the tier-3 swarm and `--resume` are Claude Code features. Under
 `harness: codex`, `tiers.middle.model` is passed through when it is a codex
 model; a claude alias left over from the default is not, and the settings
 screen names the model codex will actually run instead. Multi-node:
-`node` (what is on each machine) and `deploy` (put roscoe there, pinned to
-your version) work today; remote dispatch (`run --node`, `up`) is in flight,
+`node` (what is on each machine), `deploy` (put roscoe there, pinned to
+your version) and `run --node` (one task on one machine) work today;
+scheduling across nodes (`up`, `dispatch`, `status`) is in flight,
 as are the account vault (`accounts`), MCP dispatch into your interactive
 session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).

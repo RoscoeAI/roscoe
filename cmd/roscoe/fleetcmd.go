@@ -182,6 +182,36 @@ func cmdDeploy(ctx context.Context, explicit string, args []string) int {
 	return 0
 }
 
+// runOnNode is `roscoe run --node`: the same task, on another machine, with
+// its output and the operator's keys passed straight through ssh. The node
+// is probed first so "not logged in" is said here in one line, rather than
+// discovered as a worker failure on the far side.
+func runOnNode(ctx context.Context, cfg *config.Config, name, prompt string, o fleet.RemoteOpts) int {
+	nodes := pickNode(fleet.Enabled(cfg.Nodes), name)
+	if len(nodes) == 0 {
+		fmt.Fprintf(os.Stderr, "roscoe run: no enabled node named %q; roscoe node lists them\n", name)
+		return 2
+	}
+	n := nodes[0]
+	p := fleet.ProbeAll(ctx, nodes, fleet.SSH)[0]
+	if !p.Ready() {
+		fmt.Fprintln(os.Stderr, notReady(p))
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "[node] %s (%s) · claude %s · roscoe %s · task %s · dir %s\n",
+		n.Name, n.SSH, shortVersion(p.Claude), shortVersion(p.Roscoe), o.TaskID, o.DisplayDir())
+	return fleet.Exec(ctx, n, fleet.RemoteRun(prompt, o), isTTY(os.Stdin) && isTTY(os.Stdout))
+}
+
+// notReady says why a node cannot take work and what fixes it, in one line.
+func notReady(p fleet.Probe) string {
+	msg := fmt.Sprintf("roscoe run: %s is not ready: needs %s.", p.Node.Name, strings.Join(p.Missing(), ", "))
+	if hint := nextStep([]fleet.Probe{p}); hint != "" {
+		msg += hint
+	}
+	return msg
+}
+
 func pickNode(nodes []config.Node, name string) []config.Node {
 	for _, n := range nodes {
 		if n.Name == name {

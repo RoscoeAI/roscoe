@@ -105,8 +105,8 @@ commands:
   config set <dotted.path> <value>        change one config value and save
   router [--bind B] [--port N]            run the model router in the foreground
   smoke [--full]                          run the environment smoke checks
-  run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]
-                                          run one task through a local worker;
+  run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>] [--node N]
+                                          run one task through a local worker, or on node N;
                                           esc interrupts + lets you type a redirect;
                                           --resume migrates + continues an existing claude session
   chat [--dir D] [--resume <session-id>]  hold a conversation with one worker

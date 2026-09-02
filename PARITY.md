@@ -59,8 +59,9 @@ Deviation is the point in these:
 - **Escalation by text message.** Claude Code waits for you; roscoe texts
   you and takes your reply as the answer.
 - **A fleet across machines.** `node` shows every configured machine and
-  what it needs; `deploy` puts roscoe there pinned to your version. Remote
-  dispatch (`run --node`, `up`) is next.
+  what it needs; `deploy` puts roscoe there pinned to your version;
+  `run --node` runs a task on one of them with the stream and your keys
+  passing through ssh. Scheduling across nodes (`up`, `dispatch`) is next.
 - **Memory that compounds.** A Graphify knowledge graph under `~/.roscoe`.
   Planned.
 - **Either harness.** Claude Code or Codex workers behind one interface.

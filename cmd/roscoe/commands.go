@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"roscoe.sh/roscoe/internal/config"
+	"roscoe.sh/roscoe/internal/fleet"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/notify"
 	"roscoe.sh/roscoe/internal/relay"
@@ -232,6 +233,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	resume := fl.String("resume", "", "continue an existing claude session by id (migrates the transcript into the fleet)")
 	fromConfig := fl.String("from-config-dir", "", "CLAUDE_CONFIG_DIR to migrate --resume's session from (default: ~/.claude)")
 	harness := fl.String("harness", "", `worker harness: "claude" (default) or "codex" (overrides tiers.middle.harness)`)
+	node := fl.String("node", "", "run on this node from nodes[] instead of here (see roscoe node)")
 	_ = fl.Parse(args)
 	rest := fl.Args()
 	var prompt string
@@ -258,6 +260,19 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		prompt = rest[0]
 	}
 
+	if len(rest) > 1 { // accept flags after the prompt too, per the synopsis
+		_ = fl.Parse(rest[1:])
+		if fl.NArg() > 0 {
+			fmt.Fprintf(os.Stderr, "roscoe run: unexpected arguments %q (quote the prompt)\n", fl.Args())
+			return 2
+		}
+	}
+	// Flags are all known from here on; --resume read before this point was
+	// ignored when it came after the prompt.
+	if *node != "" && *resume != "" {
+		fmt.Fprintln(os.Stderr, "roscoe run: --resume and --node do not combine; the session's transcript is on this machine")
+		return 2
+	}
 	resumeFrom := ""
 	if *resume != "" {
 		src, err := worker.FindSession(*fromConfig, *resume)
@@ -267,13 +282,6 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		}
 		resumeFrom = src
 		fmt.Fprintf(os.Stderr, "[migrate] importing session %s from %s\n", *resume, src)
-	}
-	if len(rest) > 1 { // accept flags after the prompt too, per the synopsis
-		_ = fl.Parse(rest[1:])
-		if fl.NArg() > 0 {
-			fmt.Fprintf(os.Stderr, "roscoe run: unexpected arguments %q (quote the prompt)\n", fl.Args())
-			return 2
-		}
 	}
 
 	cfg, env, _, err := loadConfigAndEnv(explicit)
@@ -287,6 +295,9 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 
 	if *taskID == "" {
 		*taskID = newTaskID()
+	}
+	if *node != "" {
+		return runOnNode(ctx, cfg, *node, prompt, fleet.RemoteOpts{TaskID: *taskID, Dir: *dir, Harness: *harness})
 	}
 	if *dir == "" {
 		if *dir, err = os.Getwd(); err != nil {

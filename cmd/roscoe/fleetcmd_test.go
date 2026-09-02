@@ -79,6 +79,24 @@ func TestNextStepPointsAtTheRealGap(t *testing.T) {
 	}
 }
 
+// Refusing to dispatch must say what is missing and how to fix it, on one
+// line, because it is the whole of what the operator sees.
+func TestNotReadySaysWhyAndHow(t *testing.T) {
+	ps := fleetProbes()
+	got := notReady(ps[1]) // deployed, no login
+	if !strings.Contains(got, "roscoe-2tb is not ready: needs login") || !strings.Contains(got, "claude auth login") {
+		t.Errorf("no-login node: %q", got)
+	}
+	got = notReady(ps[2]) // blank
+	if !strings.Contains(got, "needs roscoe, config, claude, env") || !strings.Contains(got, "roscoe deploy") {
+		t.Errorf("blank node: %q", got)
+	}
+	got = notReady(ps[3]) // unreachable
+	if !strings.Contains(got, "needs unreachable") {
+		t.Errorf("down node: %q", got)
+	}
+}
+
 func TestShortVersionAndPin(t *testing.T) {
 	cases := map[string]string{
 		"roscoe v0.28.0 (go1.26.7)": "v0.28.0",
