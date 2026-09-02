@@ -142,6 +142,14 @@ func renderTop(d topData) string {
 		running += fmt.Sprintf(" · fleet %d/%d slots busy, %d node%s ready", busy, slots, ready, plural(ready))
 	}
 	fmt.Fprintf(&b, "  %-9s %s\n", "running", running)
+	// The account's window, from the newest run that recorded one: what is
+	// left of the subscription before workers start being refused.
+	for _, s := range d.Sessions {
+		if s.Window != "" {
+			fmt.Fprintf(&b, "  %-9s %s  (as of %s)\n", "account", s.Window, sessions.Age(s.Ended, d.Now))
+			break
+		}
+	}
 
 	if d.Probes != nil {
 		b.WriteString("\n")

@@ -535,6 +535,15 @@ func recordRouterTotals(led *ledger.Ledger, r *router.Router, cfg *config.Config
 			line += fmt.Sprintf(" · $%.4f", t.CostUSD)
 		}
 		fmt.Fprintln(os.Stderr, line)
+		if l, ok := r.RateLimits()[up]; ok {
+			line := l.Line(time.Now())
+			fmt.Fprintf(os.Stderr, "[router] %s · %s\n", up, line)
+			if led != nil {
+				// So roscoe top can say how much of the window is left without
+				// spending a request to ask.
+				_ = led.Note("router.limits", map[string]any{"task": taskID, "upstream": up, "window": line, "headers": l.Headers})
+			}
+		}
 		if led != nil {
 			_ = led.Note("router.totals", map[string]any{
 				"task": taskID, "upstream": up, "total": t,

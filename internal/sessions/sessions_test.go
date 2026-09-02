@@ -223,3 +223,22 @@ func TestReadLedgerIgnoresGuessedCosts(t *testing.T) {
 		t.Errorf("mixed = cost %.4f unpriced %d, want sonnet's $0.25 kept", m.CostUSD, m.Unpriced)
 	}
 }
+
+// The account window recorded during a run is read back for roscoe top.
+func TestReadLedgerWindow(t *testing.T) {
+	dir := t.TempDir()
+	run := filepath.Join(dir, "task-w")
+	if err := os.MkdirAll(run, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ledger := `{"ts":"2026-09-02T22:00:00Z","task":"task-w","seq":1,"event":{"type":"result","num_turns":1,"total_cost_usd":0.01,"session_id":"s"}}
+{"ts":"2026-09-02T22:00:01Z","kind":"router.limits","task":"task-w","upstream":"anthropic","window":"5h window 5% used, resets in 2h50m","headers":{}}
+`
+	if err := os.WriteFile(filepath.Join(run, "events.jsonl"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(dir, 0, nil)
+	if err != nil || len(list) != 1 || list[0].Window != "5h window 5% used, resets in 2h50m" {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+}

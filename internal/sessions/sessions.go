@@ -37,6 +37,10 @@ type Session struct {
 	// RoutedCostUSD is what the router priced for requests it forwarded
 	// (tier 3), included in CostUSD. The harness cannot know this spend.
 	RoutedCostUSD float64
+	// Window is what the API last said about the account's usage window
+	// during this run ("5h window 5% used, resets in 2h · ..."), from the
+	// router.limits note; "" when the run recorded none.
+	Window string
 	// Unpriced is tokens the harness billed at a made-up rate for a model it
 	// does not know (costBasis "unknown", e.g. roscoe/tier3) in a run with
 	// no router record to price them properly. Their guessed cost is left
@@ -143,6 +147,14 @@ func readLedger(path string) (Session, bool) {
 			}
 			if rec.Kind == "fleet.home" {
 				s.Node = rec.Node
+			}
+			if rec.Kind == "router.limits" {
+				var note struct {
+					Window string `json:"window"`
+				}
+				if json.Unmarshal(sc.Bytes(), &note) == nil && note.Window != "" {
+					s.Window = note.Window
+				}
 			}
 			if rec.Kind == "router.totals" {
 				// {"upstream":..., "total":{...,"cost_usd":...}}, one per

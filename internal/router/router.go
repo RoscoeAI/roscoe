@@ -54,6 +54,7 @@ type Router struct {
 	logMu   sync.Mutex
 	dumpDir string
 	dumpN   atomic.Int64
+	limits  limitBook
 	client  *http.Client
 	mux     *http.ServeMux
 	ln      net.Listener
@@ -259,7 +260,7 @@ func (rt *Router) handleProxy(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	e.BytesIn = len(body)
-	rt.dump(req.URL.Path, body)
+	dumpN := rt.dump(req.URL.Path, body)
 
 	// Route by model. An unparsable body or absent model falls through to the
 	// default route untouched — the upstream owns rejecting it.
@@ -317,6 +318,11 @@ func (rt *Router) handleProxy(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+
+	// What the upstream says about the account's room: kept per upstream for
+	// the closing summary and for calibration, dumped when asked.
+	rt.limits.note(provName, resp.StatusCode, resp.Header)
+	rt.dumpHeaders(dumpN, provName, resp.StatusCode, resp.Header)
 
 	// Response path: copy status + headers, then stream with per-write Flush
 	// so SSE frames never buffer. No body inspection.
@@ -463,14 +469,15 @@ func writeAPIError(w http.ResponseWriter, status int, msg string) {
 // dump writes one request body to DumpDir, numbered in arrival order so two
 // runs' requests line up for a diff. Failures are ignored: a debugging aid
 // must never fail a request.
-func (rt *Router) dump(path string, body []byte) {
+func (rt *Router) dump(path string, body []byte) int64 {
 	if rt.dumpDir == "" {
-		return
+		return 0
 	}
 	n := rt.dumpN.Add(1)
 	name := fmt.Sprintf("%03d-%s.json", n, strings.Trim(strings.ReplaceAll(path, "/", "_"), "_"))
 	_ = os.MkdirAll(rt.dumpDir, 0o755)
 	_ = os.WriteFile(filepath.Join(rt.dumpDir, name), body, 0o600)
+	return n
 }
 
 func firstNonEmpty(a, b string) string {

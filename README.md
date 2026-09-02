@@ -234,7 +234,10 @@ roscoe top                       # spend today and this week, what is running he
 roscoe top --watch 10s           # keep it on a second screen
 ```
 
-Spend comes from the run ledgers: what the harness billed for its own
+The `account` line is what the API last said about your subscription's
+usage windows, "5h window 5% used, resets in 2h50m · 7d window 11% used",
+read from the newest run's ledger rather than by spending a request; every
+run's closing `[router]` line prints the same. Spend comes from the run ledgers: what the harness billed for its own
 model, plus what the router priced for requests it forwarded to another
 provider (tier 3), which the harness never sees. A model the harness does
 not know (every routed one) it prices by guesswork, and that guess is left

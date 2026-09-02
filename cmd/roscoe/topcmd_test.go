@@ -14,7 +14,7 @@ var topNow = time.Date(2026, 9, 2, 14, 0, 0, 0, time.Local)
 
 func topSessions() []sessions.Session {
 	return []sessions.Session{
-		{TaskID: "t-now", ID: "aaaa1111", Started: topNow.Add(-time.Hour), Ended: topNow.Add(-50 * time.Minute), Turns: 3, CostUSD: 0.40, About: "fix the tests"},
+		{TaskID: "t-now", ID: "aaaa1111", Started: topNow.Add(-time.Hour), Ended: topNow.Add(-50 * time.Minute), Turns: 3, CostUSD: 0.40, About: "fix the tests", Window: "5h window 5% used, resets in 2h50m"},
 		{TaskID: "t-early", ID: "bbbb2222", Started: startOfDay(topNow).Add(time.Minute), Ended: startOfDay(topNow).Add(10 * time.Minute), Turns: 1, CostUSD: 0.10, About: "morning"},
 		{TaskID: "t-mon", ID: "cccc3333", Started: startOfWeek(topNow).Add(9 * time.Hour), Ended: startOfWeek(topNow).Add(10 * time.Hour), Turns: 8, CostUSD: 2.00, About: "monday"},
 		{TaskID: "t-last-week", ID: "dddd4444", Started: startOfWeek(topNow).Add(-time.Hour), Ended: startOfWeek(topNow).Add(-30 * time.Minute), Turns: 2, CostUSD: 5.00, About: "sunday night"},
@@ -52,6 +52,7 @@ func TestRenderTop(t *testing.T) {
 		"today     $0.50 · 2 runs · 4 turns",
 		"week      $2.50 · 3 runs · 12 turns",
 		"2 workers here · fleet 1/4 slots busy, 1 node ready",
+		"account   5h window 5% used, resets in 2h50m  (as of 50m ago)",
 		"roscoe-2tb   roscoe-2tb-ts",
 		"fix the tests",
 		"morning",
