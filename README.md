@@ -210,6 +210,24 @@ Replies arrive over an outbound WebSocket and queue server-side while your
 laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 `roscoe relay listen`.
 
+## More machines
+
+Every machine under `nodes[]` in roscoe.json is reached over your own ssh
+aliases and keys. Roscoe adds no daemon and opens no port.
+
+```
+roscoe node                      # what is on each machine, and what it needs
+roscoe deploy                    # install roscoe there, pinned to this version, and push roscoe.json
+roscoe deploy --node studio --claude --env   # one node; also install Claude Code and push the env file
+ssh -t studio-ts claude auth login           # the one step deploy cannot do for you
+```
+
+`node` says `ready` or `needs roscoe, config, claude, env`, and its last line
+is the one command that gets the fleet closer. `deploy` pins the install to
+the version you are running (`ROSCOE_VERSION` in the installer), so nodes never
+disagree about what roscoe is. The env file is your API keys and only moves
+with `--env`; it lands with mode 600.
+
 ## Status
 
 Early and moving fast. Working today: `init`, `config`, `router`, `smoke`,
@@ -221,9 +239,11 @@ workers with full subagent swarms, or Codex workers via `--harness codex` /
 for now: the tier-3 swarm and `--resume` are Claude Code features. Under
 `harness: codex`, `tiers.middle.model` is passed through when it is a codex
 model; a claude alias left over from the default is not, and the settings
-screen names the model codex will actually run instead. In
-flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
-(`accounts`), MCP dispatch into your interactive session, and a `roscoe top` TUI.
+screen names the model codex will actually run instead. Multi-node:
+`node` (what is on each machine) and `deploy` (put roscoe there, pinned to
+your version) work today; remote dispatch (`run --node`, `up`) is in flight,
+as are the account vault (`accounts`), MCP dispatch into your interactive
+session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).
 
 ## Requirements

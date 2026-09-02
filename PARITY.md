@@ -58,7 +58,9 @@ Deviation is the point in these:
   *(Set and displayed today; enforcement lands with the quorum.)*
 - **Escalation by text message.** Claude Code waits for you; roscoe texts
   you and takes your reply as the answer.
-- **A fleet across machines.** `up`/`node`/`deploy` over ssh. Coming.
+- **A fleet across machines.** `node` shows every configured machine and
+  what it needs; `deploy` puts roscoe there pinned to your version. Remote
+  dispatch (`run --node`, `up`) is next.
 - **Memory that compounds.** A Graphify knowledge graph under `~/.roscoe`.
   Planned.
 - **Either harness.** Claude Code or Codex workers behind one interface.

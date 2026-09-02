@@ -81,7 +81,11 @@ func realMain() int {
 		return cmdUpgrade(ctx, *cfgPath, rest)
 	case "relay":
 		return cmdRelay(ctx, *cfgPath, rest)
-	case "up", "node", "accounts", "deploy", "dispatch", "status", "top":
+	case "node":
+		return cmdNode(ctx, *cfgPath, rest)
+	case "deploy":
+		return cmdDeploy(ctx, *cfgPath, rest)
+	case "up", "accounts", "dispatch", "status", "top":
 		return cmdStub(cmd)
 	default:
 		fmt.Fprintf(os.Stderr, "roscoe: unknown command %q\n\n", cmd)
@@ -117,7 +121,9 @@ commands:
   upgrade --phone +1XXXXXXXXXX            link the $5/mo hosted SMS relay
   relay status | listen | unlink          inspect the link, tail replies, or clear it
   version                                 print the roscoe version
-  up | node | accounts | deploy | dispatch | status | top
+  node                                    every machine in nodes[]: reachable, what is installed, ready or not
+  deploy [--node N] [--claude] [--env]    put this roscoe version and the config on each enabled node
+  up | accounts | dispatch | status | top
                                           coming in slice 2 (see ARCHITECTURE.md)
 
 --config defaults to ./roscoe.json, falling back to ~/.roscoe/roscoe.json.
