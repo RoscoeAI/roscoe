@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -138,8 +137,17 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		}
 	}
 
+	// pendingPrompt is what the operator typed while the last turn was still
+	// running. It goes straight through rather than making them retype it.
+	pendingPrompt := ""
 	for {
-		line, ok := keys.ReadLineOn(sc, "› ", "", history, comp)
+		var line string
+		var ok bool
+		if pendingPrompt != "" {
+			line, ok, pendingPrompt = pendingPrompt, true, ""
+		} else {
+			line, ok = keys.ReadLineOn(sc, "› ", "", history, comp)
+		}
 		if !ok {
 			sc.Leave()
 			fmt.Fprintln(os.Stderr, "roscoe chat: bye")
@@ -307,14 +315,12 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		}
 
 		turnCtx, cancelTurn := context.WithCancel(ctx)
-		var escPressed atomic.Bool
-		go func() {
-			if keys.WaitEsc(turnCtx) {
-				escPressed.Store(true)
-				sc.Print(ansiDim + "esc · interrupting this turn…" + ansiReset)
-				cancelTurn()
-			}
-		}()
+		// The box stays live for the whole turn: type to queue, tab to steer,
+		// esc to stop. Waiting with a cursor that swallows input is how a slow
+		// turn becomes indistinguishable from a dead one.
+		ti := &turnInput{}
+		inputDone := make(chan pending, 1)
+		go func() { inputDone <- ti.run(turnCtx, sc, keys, cancelTurn) }()
 
 		res, runErr := worker.Run(turnCtx,
 			worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token, Resume: session, ResumeFrom: resumeFrom},
@@ -330,13 +336,15 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			}},
 		)
 		cancelTurn()
+		acted := <-inputDone
+		sc.SetPrompt("", "", "", "")
 		resumeFrom = "" // the transcript now lives in this task's config dir
 
 		if res != nil && res.SessionID != "" {
 			session = res.SessionID
 		}
 		switch {
-		case escPressed.Load():
+		case acted.Esc:
 			sc.Print(ansiDim + "stopped · say what you want instead" + ansiReset)
 		case ctx.Err() != nil:
 			sc.Leave()
@@ -351,6 +359,12 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			spent += res.TotalCostUSD
 			turns++
 			sc.Printf("%s%.4f USD this turn · %.4f total%s", ansiFaint, res.TotalCostUSD, spent, ansiReset)
+		}
+
+		// Anything the operator committed mid-turn becomes the next prompt,
+		// without them having to retype it now that the turn is over.
+		if next := acted.next(); next != "" {
+			pendingPrompt = next
 		}
 	}
 }
