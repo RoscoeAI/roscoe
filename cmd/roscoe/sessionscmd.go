@@ -177,12 +177,23 @@ func oneLineOf(s string, max int) string {
 	return s
 }
 
+// shortDir renders a working directory for a listing: ~ for the home, and a
+// long path (a scratch dir under /private/tmp runs to 120 characters) cut to
+// its last two components with an ellipsis, which is what identifies it.
 func shortDir(dir string) string {
 	if dir == "" {
 		return ""
 	}
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, home) {
-		return "~" + dir[len(home):]
+		dir = "~" + dir[len(home):]
 	}
-	return dir
+	const max = 48
+	if len(dir) <= max {
+		return dir
+	}
+	parts := strings.Split(strings.TrimRight(dir, "/"), "/")
+	if len(parts) <= 2 {
+		return dir
+	}
+	return "…/" + strings.Join(parts[len(parts)-2:], "/")
 }

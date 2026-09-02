@@ -103,3 +103,16 @@ func TestSessionsTableMarksUnpriced(t *testing.T) {
 		t.Error("a fully priced listing has a footnote")
 	}
 }
+
+func TestShortDirCutsLongPaths(t *testing.T) {
+	long := "/private/tmp/claude-501/-Users-t-Projects-node-orch/a1c55021-68ad-424c-92cd-7ffaf6026668/scratchpad/mcptest"
+	if got := shortDir(long); got != "…/scratchpad/mcptest" {
+		t.Errorf("shortDir(long) = %q", got)
+	}
+	if got := shortDir("/Users/x/proj"); got != "/Users/x/proj" {
+		t.Errorf("short path changed: %q", got)
+	}
+	if got := shortDir(""); got != "" {
+		t.Errorf("empty = %q", got)
+	}
+}

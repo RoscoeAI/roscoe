@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"roscoe.sh/roscoe/internal/accounts"
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/router"
 )
@@ -191,9 +192,12 @@ func routerCheck(rt *runningRouter, name string, run func() Check) Check {
 
 func checkAnthropicLeg(ctx context.Context, cfg *config.Config, env map[string]string, rt *runningRouter) Check {
 	const name = "anthropic-count-tokens"
-	account, token := subscriptionEnvToken(cfg, env)
+	// The same resolution a worker gets: the middle tier's accounts in order,
+	// keychain or env. When none yields a token the detail says why for each,
+	// so this check and `roscoe accounts` never disagree.
+	account, token, tried := accounts.Resolve(cfg, cfg.Tiers.Middle.Accounts, env, os.Getenv, accounts.MacKeychain{})
 	if token == "" {
-		return Check{Name: name, Skipped: true, Detail: "no enabled claude-subscription account with env: token_ref resolvable"}
+		return Check{Name: name, Skipped: true, Detail: strings.TrimPrefix(accounts.Describe("", tried), "[account] ")}
 	}
 	if rt == nil {
 		return Check{Name: name, Skipped: true, Detail: "router did not start"}
@@ -213,27 +217,6 @@ func checkAnthropicLeg(ctx context.Context, cfg *config.Config, env map[string]s
 		c.Detail = strings.TrimSpace("account " + account + " " + c.Detail)
 	}
 	return c
-}
-
-// subscriptionEnvToken finds the first enabled claude-subscription account
-// whose token_ref is an env: reference present in env.
-func subscriptionEnvToken(cfg *config.Config, env map[string]string) (name, token string) {
-	for _, a := range cfg.Accounts {
-		if a.Kind != "claude-subscription" {
-			continue
-		}
-		if a.Enabled != nil && !*a.Enabled {
-			continue
-		}
-		v, ok := strings.CutPrefix(a.TokenRef, "env:")
-		if !ok {
-			continue
-		}
-		if t := env[v]; t != "" {
-			return a.Name, t
-		}
-	}
-	return "", ""
 }
 
 func checkClaudeBin(ctx context.Context) Check {
