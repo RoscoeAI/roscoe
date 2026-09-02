@@ -54,49 +54,75 @@ type Attempt struct {
 // the loaded env file; getenv covers the process environment behind it.
 func Resolve(cfg *config.Config, wanted []string, env map[string]string, getenv func(string) string, kc Keychain) (name, token string, tried []Attempt) {
 	for _, want := range wanted {
-		a, ok := find(cfg, want)
-		if !ok {
-			tried = append(tried, Attempt{want, "not in accounts[]"})
-			continue
+		t, why := resolveOne(cfg, want, env, getenv, kc)
+		if t != "" {
+			return want, t, tried
 		}
-		if a.Enabled != nil && !*a.Enabled {
-			tried = append(tried, Attempt{want, "disabled"})
-			continue
-		}
-		ref, err := ParseRef(a.TokenRef)
-		if err != nil {
-			tried = append(tried, Attempt{want, err.Error()})
-			continue
-		}
-		switch ref.Scheme {
-		case "env":
-			if t := env[ref.Name]; t != "" {
-				return a.Name, t, tried
-			}
-			if getenv != nil {
-				if t := getenv(ref.Name); t != "" {
-					return a.Name, t, tried
-				}
-			}
-			tried = append(tried, Attempt{want, ref.Name + " is unset"})
-		case "keychain":
-			if kc == nil {
-				tried = append(tried, Attempt{want, "no keychain here"})
-				continue
-			}
-			t, err := kc.Get(ref.Name)
-			if err != nil {
-				tried = append(tried, Attempt{want, "keychain " + ref.Name + ": " + err.Error()})
-				continue
-			}
-			if t == "" {
-				tried = append(tried, Attempt{want, "keychain " + ref.Name + " is empty"})
-				continue
-			}
-			return a.Name, t, tried
-		}
+		tried = append(tried, Attempt{want, why})
 	}
 	return "", "", tried
+}
+
+// Credential is an account that yielded a token: what a worker runs under.
+type Credential struct {
+	Name  string
+	Token string
+}
+
+// ResolveAll returns every account in wanted that yields a token, in order,
+// and why the others did not. Parallel workers draw from all of them, each
+// account carrying at most its own share, so a fleet with two subscriptions
+// runs twice as wide as one.
+func ResolveAll(cfg *config.Config, wanted []string, env map[string]string, getenv func(string) string, kc Keychain) (creds []Credential, tried []Attempt) {
+	for _, want := range wanted {
+		t, why := resolveOne(cfg, want, env, getenv, kc)
+		if t != "" {
+			creds = append(creds, Credential{Name: want, Token: t})
+			continue
+		}
+		tried = append(tried, Attempt{want, why})
+	}
+	return creds, tried
+}
+
+// resolveOne yields one account's token, or the reason it has none.
+func resolveOne(cfg *config.Config, want string, env map[string]string, getenv func(string) string, kc Keychain) (token, why string) {
+	a, ok := find(cfg, want)
+	if !ok {
+		return "", "not in accounts[]"
+	}
+	if a.Enabled != nil && !*a.Enabled {
+		return "", "disabled"
+	}
+	ref, err := ParseRef(a.TokenRef)
+	if err != nil {
+		return "", err.Error()
+	}
+	switch ref.Scheme {
+	case "env":
+		if t := env[ref.Name]; t != "" {
+			return t, ""
+		}
+		if getenv != nil {
+			if t := getenv(ref.Name); t != "" {
+				return t, ""
+			}
+		}
+		return "", ref.Name + " is unset"
+	case "keychain":
+		if kc == nil {
+			return "", "no keychain here"
+		}
+		t, err := kc.Get(ref.Name)
+		if err != nil {
+			return "", "keychain " + ref.Name + ": " + err.Error()
+		}
+		if t == "" {
+			return "", "keychain " + ref.Name + " is empty"
+		}
+		return t, ""
+	}
+	return "", "unknown token_ref scheme"
 }
 
 func find(cfg *config.Config, name string) (config.Account, bool) {

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"roscoe.sh/roscoe/internal/accounts"
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/pool"
@@ -114,11 +115,79 @@ func indexOf(xs []string, s string) int {
 	return -1
 }
 
-// workerTask is the real oneTask: a worker per task with its own ledger,
-// warming the pool on the first assistant event, which is the first response
-// the API returned and so the moment the shared prefix is cached.
-func workerTask(cfg *config.Config, addr, account, token, dir string) oneTask {
+// accountPool hands parallel workers their accounts: the least-loaded one
+// with a free slot, so no account carries more than
+// limits.per_account_max_concurrent at once, and a fleet with two accounts
+// runs twice as wide as one. With no credentials every worker runs on
+// claude's own login and nothing is limited here.
+type accountPool struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	creds    []accounts.Credential
+	inFlight []int
+	cap      int // per account; <= 0 means unlimited
+}
+
+func newAccountPool(creds []accounts.Credential, perAccount int) *accountPool {
+	p := &accountPool{creds: creds, inFlight: make([]int, len(creds)), cap: perAccount}
+	p.cond = sync.NewCond(&p.mu)
+	return p
+}
+
+// acquire blocks until an account has room and returns it with a release.
+// The zero credential (no accounts) is returned at once.
+func (p *accountPool) acquire(ctx context.Context) (accounts.Credential, func()) {
+	if len(p.creds) == 0 {
+		return accounts.Credential{}, func() {}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for {
+		best := -1
+		for i := range p.creds {
+			if p.cap > 0 && p.inFlight[i] >= p.cap {
+				continue
+			}
+			if best < 0 || p.inFlight[i] < p.inFlight[best] {
+				best = i
+			}
+		}
+		if best >= 0 {
+			p.inFlight[best]++
+			return p.creds[best], func() {
+				p.mu.Lock()
+				p.inFlight[best]--
+				p.mu.Unlock()
+				p.cond.Broadcast()
+			}
+		}
+		if ctx.Err() != nil {
+			return accounts.Credential{}, func() {}
+		}
+		// Wake when a slot frees, or poll so a cancelled context is noticed.
+		go func() { time.Sleep(50 * time.Millisecond); p.cond.Broadcast() }()
+		p.cond.Wait()
+	}
+}
+
+// slots is how many workers the accounts can carry at once; 0 means no
+// account-imposed limit.
+func (p *accountPool) slots() int {
+	if len(p.creds) == 0 || p.cap <= 0 {
+		return 0
+	}
+	return len(p.creds) * p.cap
+}
+
+// workerTask is the real oneTask: a worker per task with its own ledger and
+// an account from the pool, warming the pool on the first assistant event,
+// which is the first response the API returned and so the moment the shared
+// prefix is cached.
+func workerTask(cfg *config.Config, addr string, accts *accountPool, dir string) oneTask {
 	return func(ctx context.Context, t pool.Task, warm func()) (*streamjson.ResultEvent, error) {
+		cred, release := accts.acquire(ctx)
+		defer release()
+		account, token := cred.Name, cred.Token
 		var led *ledger.Ledger
 		if cfg.Reporting.Ledger != "" {
 			p := config.ExpandPath(strings.ReplaceAll(cfg.Reporting.Ledger, "{run_id}", t.ID))

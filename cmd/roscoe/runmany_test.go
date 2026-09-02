@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"roscoe.sh/roscoe/internal/accounts"
 	"roscoe.sh/roscoe/internal/pool"
 	"roscoe.sh/roscoe/internal/streamjson"
 )
@@ -65,5 +66,55 @@ func TestRunManyReportsEveryTask(t *testing.T) {
 	}
 	if ids := taskIDs("t", 3); strings.Join(ids, ",") != "t-1,t-2,t-3" {
 		t.Errorf("taskIDs = %v", ids)
+	}
+}
+
+// Two accounts with room for one each carry two workers at once, spread
+// across both; a third waits for a release. No accounts means no limit.
+func TestAccountPoolSpreadsAndCaps(t *testing.T) {
+	creds := []accounts.Credential{{Name: "a", Token: "ta"}, {Name: "b", Token: "tb"}}
+	p := newAccountPool(creds, 1)
+	if p.slots() != 2 {
+		t.Fatalf("slots = %d", p.slots())
+	}
+	c1, r1 := p.acquire(context.Background())
+	c2, r2 := p.acquire(context.Background())
+	if c1.Name == c2.Name {
+		t.Errorf("both workers got %s; the second should take the other account", c1.Name)
+	}
+	got := make(chan string, 1)
+	go func() { c3, r3 := p.acquire(context.Background()); got <- c3.Name; r3() }()
+	select {
+	case n := <-got:
+		t.Fatalf("third worker got %s while both accounts were full", n)
+	case <-time.After(80 * time.Millisecond):
+	}
+	r1()
+	select {
+	case n := <-got:
+		if n != c1.Name {
+			t.Errorf("third worker got %s, want the freed %s", n, c1.Name)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("third worker never got the freed account")
+	}
+	r2()
+	// Cancelled while waiting: returns rather than hanging.
+	c4, r4 := p.acquire(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, r5 := p.acquire(ctx) // b is free, so this one succeeds regardless
+	r5()
+	r4()
+	_ = c4
+	// No credentials: everything runs on claude's own login, unlimited.
+	none := newAccountPool(nil, 2)
+	if none.slots() != 0 {
+		t.Errorf("no accounts should impose no limit, got %d", none.slots())
+	}
+	if c, r := none.acquire(context.Background()); c.Name != "" {
+		t.Errorf("no-account pool returned %q", c.Name)
+	} else {
+		r()
 	}
 }

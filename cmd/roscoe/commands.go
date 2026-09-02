@@ -368,12 +368,20 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 
 	account, token := resolveMiddleAccount(cfg, env)
 	if len(more) > 0 {
-		perAccount := 0
-		if account != "" {
-			perAccount = cfg.Limits.PerAccountMaxConcurrent
+		// Every account with a token, not just the first: parallel workers
+		// spread across them, each account under its own ceiling.
+		creds, _ := accounts.ResolveAll(cfg, cfg.Tiers.Middle.Accounts, env, os.Getenv, accounts.MacKeychain{})
+		accts := newAccountPool(creds, cfg.Limits.PerAccountMaxConcurrent)
+		limit := pool.EffectiveLimit(cfg.Limits.MaxParallelTasks, accts.slots(), 1+len(more))
+		if len(creds) > 1 {
+			names := make([]string, len(creds))
+			for i, c := range creds {
+				names[i] = c.Name
+			}
+			fmt.Fprintf(os.Stderr, "[accounts] %d in play: %s · %d each at once\n", len(creds), strings.Join(names, ", "), cfg.Limits.PerAccountMaxConcurrent)
 		}
-		limit := pool.EffectiveLimit(cfg.Limits.MaxParallelTasks, perAccount, 1+len(more))
-		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, workerTask(cfg, addr, account, token, *dir))
+		_ = account
+		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, workerTask(cfg, addr, accts, *dir))
 	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 

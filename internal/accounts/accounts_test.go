@@ -167,3 +167,24 @@ func TestMintedAge(t *testing.T) {
 		}
 	}
 }
+
+// ResolveAll keeps every account that has a token, in order, and explains
+// the rest, so parallel workers can spread across accounts.
+func TestResolveAllKeepsEveryWorkingAccount(t *testing.T) {
+	cfg := config.Default()
+	on := true
+	cfg.Accounts[2].Enabled = &on
+	kc := &fakeKC{items: map[string]string{"roscoe-account-primary": "tok-p", "roscoe-account-secondary": "tok-s"}}
+	creds, tried := ResolveAll(cfg, []string{"primary", "secondary", "api-fallback", "ghost"}, nil, nil, kc)
+	if len(creds) != 2 || creds[0].Name != "primary" || creds[0].Token != "tok-p" || creds[1].Name != "secondary" {
+		t.Errorf("creds = %+v", creds)
+	}
+	if len(tried) != 2 || tried[0].Account != "api-fallback" || tried[1].Why != "not in accounts[]" {
+		t.Errorf("tried = %+v", tried)
+	}
+	// Resolve is the first of them, with the same reasons for the misses.
+	name, tok, _ := Resolve(cfg, []string{"ghost", "secondary"}, nil, nil, kc)
+	if name != "secondary" || tok != "tok-s" {
+		t.Errorf("Resolve = %q %q", name, tok)
+	}
+}
