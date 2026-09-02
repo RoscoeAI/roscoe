@@ -42,6 +42,20 @@ func cmdModels(ctx context.Context, explicit string, args []string) int {
 			fmt.Fprintf(os.Stderr, "  %-12s learned %q from past runs\n",
 				cfg.Tiers.Middle.Provider, cat.Resolve(cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model))
 		}
+		// Tier 1 never runs through roscoe, so no init event will ever name
+		// its model. The installed harness resolves aliases itself and puts the
+		// concrete id on the wire, so ask it: point it at a local endpoint that
+		// records the model and refuses the request. Zero tokens, no login
+		// needed, and it answers for every alias in the config at once.
+		aliases := []string{cfg.Tiers.Main.Model, cfg.Tiers.Middle.Model}
+		prov := cfg.Tiers.Middle.Provider
+		if got, err := cat.ResolveViaHarness(ctx, prov, "", aliases); err != nil {
+			fmt.Fprintf(os.Stderr, "  %-12s harness probe: %v\n", prov, err)
+		} else {
+			for alias, concrete := range got {
+				fmt.Fprintf(os.Stderr, "  %-12s %s  →  %s (asked claude)\n", prov, alias, concrete)
+			}
+		}
 		if err := cat.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "roscoe models: %v\n", err)
 			return 1

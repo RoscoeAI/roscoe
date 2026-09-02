@@ -78,19 +78,22 @@ precedence is flag > `ROSCOE_*` env > `roscoe.json` > defaults. See
 Nobody memorizes a config schema, so in `roscoe chat` the settings are
 something you look at rather than recall. `/settings` puts all three tiers on
 one screen, each with its model, provider, and effort, and says plainly where
-a knob does not exist rather than leaving a gap:
+a knob does not exist rather than leaving a gap (tier 3 has no per-subagent
+effort in Claude Code, and the row says so):
 
 ```
   tier 1   your session, the one you talk to
-  › model      opus
+  › model      opus  →  claude-opus-5
     provider   anthropic
-    effort     yours to set, not roscoe's: this is your own claude session
+    effort     ultracode
 
   tier 2   workers, one spawned per task
-    model      sonnet
+    model      sonnet  →  claude-sonnet-5
     provider   anthropic
     effort     ultracode
     harness    claude
+    lean       true   no MCP servers or personal skills, much cheaper prefix
+    cache      1h prompt cache
 
   tier 3   the swarm each worker fans out to
     model      zai-org/GLM-5.3-Flash
@@ -101,9 +104,13 @@ a knob does not exist rather than leaving a gap:
 
 Model aliases resolve to what they actually are, so a row reads
 `sonnet  →  claude-sonnet-5` rather than leaving you to guess which sonnet.
-Roscoe learns that from the harness's own init event on every run, which needs
-no credential it does not already have; `roscoe models --refresh` also asks
-each provider for its published list where one exists.
+Roscoe learns that three ways, none needing a credential it does not already
+have: from the harness's init event on every run; from each provider's published
+list where one exists; and by asking the installed `claude` directly, pointing
+it at a local endpoint that records the model it puts on the wire and refuses
+the request. That last one costs no tokens and is the only way to answer for
+tier 1, where nothing ever runs through roscoe. `roscoe models --refresh` does
+all three.
 
 Up and down move, left and right step through a setting's values, enter types
 one in, esc closes. Every change is validated and written to `roscoe.json` as
