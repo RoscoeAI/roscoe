@@ -300,3 +300,38 @@ func extractText(raw json.RawMessage) string {
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
+
+// FirstMessage returns the first thing the operator said in a transcript,
+// which is what people recognise a conversation by in a listing. Harness
+// plumbing (reminders, notifications) is skipped the same way RecentMessages
+// skips it, so a resumed session's injected preamble is never mistaken for
+// the prompt.
+func FirstMessage(path string) (Message, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Message{}, fmt.Errorf("worker: open transcript: %w", err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), 32<<20)
+	for sc.Scan() {
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(sc.Bytes(), &rec) != nil || rec.Type != "user" {
+			continue
+		}
+		text := extractText(rec.Message.Content)
+		if text == "" || !operatorVisible(text) {
+			continue
+		}
+		return Message{Role: "user", Text: text}, nil
+	}
+	if err := sc.Err(); err != nil {
+		return Message{}, fmt.Errorf("worker: read transcript: %w", err)
+	}
+	return Message{}, fmt.Errorf("worker: no operator message in %s", filepath.Base(path))
+}

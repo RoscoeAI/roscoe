@@ -140,6 +140,11 @@ above the prompt describes whatever you are pointing at as you type.
 /config tiers.middle.effort high
 ```
 
+Finding a conversation again does not need its id. `roscoe sessions` lists what
+has run, newest first, with what each cost and the first thing you said;
+`roscoe chat --last` resumes the newest, and `roscoe chat --pick` offers a
+numbered list.
+
 ## Working a charter, not a prompt
 
 `roscoe run` answers a prompt. `roscoe loop` works a charter until it is done:

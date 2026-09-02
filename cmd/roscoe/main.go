@@ -69,6 +69,8 @@ func realMain() int {
 		return cmdChat(ctx, *cfgPath, rest)
 	case "loop":
 		return cmdLoop(ctx, *cfgPath, rest)
+	case "sessions":
+		return cmdSessions(ctx, *cfgPath, rest)
 	case "models":
 		return cmdModels(ctx, *cfgPath, rest)
 	case "memory":
@@ -108,6 +110,7 @@ commands:
                                           work a charter to completion: dispatch,
                                           read loop.md, judge, dispatch again;
                                           esc stops after the current iteration
+  sessions [--limit N]                    what roscoe has run, newest first, with ids to resume
   memory status | build | query | reflect inspect and maintain cross-run memory
   models [--refresh]                      what each tier's model alias resolves to
   notify test [msg] | notify serve        exercise the escalation channel

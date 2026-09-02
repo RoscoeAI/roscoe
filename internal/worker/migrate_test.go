@@ -340,3 +340,35 @@ func TestOversizedAndSessionConfigDir(t *testing.T) {
 		t.Errorf("fleet dir = %q, %v", fleet, err)
 	}
 }
+
+// A listing shows a conversation by its first prompt, so FirstMessage must
+// skip the harness plumbing that precedes it in a resumed transcript.
+func TestFirstMessageSkipsPlumbing(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.jsonl")
+	lines := []string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"user","message":{"role":"user","content":"<system-reminder>injected</system-reminder>"}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix the billing module"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"on it"}}`,
+		`{"type":"user","message":{"role":"user","content":"a later message"}}`,
+	}
+	if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := FirstMessage(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Text != "fix the billing module" || m.Role != "user" {
+		t.Errorf("first = %+v", m)
+	}
+	if _, err := FirstMessage(filepath.Join(dir, "missing.jsonl")); err == nil {
+		t.Error("missing file gave no error")
+	}
+	empty := filepath.Join(dir, "empty.jsonl")
+	_ = os.WriteFile(empty, []byte(`{"type":"system"}`+"\n"), 0o600)
+	if _, err := FirstMessage(empty); err == nil {
+		t.Error("a transcript with no operator message gave no error")
+	}
+}

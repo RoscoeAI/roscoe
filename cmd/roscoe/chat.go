@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/models"
 	"roscoe.sh/roscoe/internal/router"
+	"roscoe.sh/roscoe/internal/sessions"
 	"roscoe.sh/roscoe/internal/streamjson"
 	"roscoe.sh/roscoe/internal/worker"
 )
@@ -29,6 +31,8 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	fromConfig := fl.String("from-config-dir", "", "CLAUDE_CONFIG_DIR to migrate --resume's session from (default: ~/.claude)")
 	harness := fl.String("harness", "", `worker harness: "claude" (default) or "codex"`)
 	taskID := fl.String("task-id", "", "task id (default: generated)")
+	last := fl.Bool("last", false, "resume the most recent session")
+	pick := fl.Bool("pick", false, "choose a recent session to resume from a list")
 	_ = fl.Parse(args)
 
 	if !isTTY(os.Stdin) {
@@ -52,6 +56,16 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	}
 	if *taskID == "" {
 		*taskID = newTaskID()
+	}
+
+	// --last and --pick resolve to a session id the same way --resume takes
+	// one, so everything after this point is one code path.
+	if *last || *pick {
+		id, ok := chooseSession(cfg, *pick)
+		if !ok {
+			return 1
+		}
+		*resume = id
 	}
 
 	// One session for the whole chat: the first turn may import an existing
@@ -721,4 +735,56 @@ func modelChoices(cfg *config.Config) []string {
 	add(cfg.Tiers.Middle.Model)
 	add(cfg.Tiers.Main.Model)
 	return out
+}
+
+// chooseSession returns the most recent resumable session, or with pick set,
+// shows the recent ones and reads a number. It runs before the screen takes
+// over, so it prints plainly to stderr and reads a line from the terminal.
+func chooseSession(cfg *config.Config, pick bool) (string, bool) {
+	dir := runsDir(cfg)
+	if !pick {
+		s, ok := sessions.Latest(dir, enrichSession)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "roscoe chat: no session to resume yet")
+			return "", false
+		}
+		fmt.Fprintf(os.Stderr, "[resume] latest: %s · %s\n", s.ID[:8], oneLineOf(s.About, 70))
+		return s.ID, true
+	}
+	list, err := sessions.List(dir, 12, enrichSession)
+	if err != nil || len(list) == 0 {
+		fmt.Fprintln(os.Stderr, "roscoe chat: no sessions to choose from")
+		return "", false
+	}
+	var resumable []sessions.Session
+	for _, s := range list {
+		if s.Resumable() {
+			resumable = append(resumable, s)
+		}
+	}
+	if len(resumable) == 0 {
+		fmt.Fprintln(os.Stderr, "roscoe chat: no resumable sessions")
+		return "", false
+	}
+	now := time.Now()
+	for i, s := range resumable {
+		about := oneLineOf(s.About, 60)
+		if about == "" {
+			about = shortDir(s.Dir)
+		}
+		fmt.Fprintf(os.Stderr, "  %2d  %-9s %-9s $%-7.2f %s\n", i+1, sessions.Age(s.Ended, now), s.ID[:8], s.CostUSD, about)
+	}
+	fmt.Fprint(os.Stderr, "resume which? (number, enter for 1, esc to quit) ")
+	rd := bufio.NewReader(os.Stdin)
+	line, _ := rd.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return resumable[0].ID, true
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil || n < 1 || n > len(resumable) {
+		fmt.Fprintln(os.Stderr, "roscoe chat: not a listed number")
+		return "", false
+	}
+	return resumable[n-1].ID, true
 }
