@@ -192,8 +192,11 @@ const deployTimeout = 4 * time.Minute
 // Deploy puts roscoe (and optionally claude) on one node and verifies what is
 // there afterwards. Each step is one ssh or scp; the first failure stops the
 // sequence, and whatever succeeded is reported so a retry knows where it got.
-func Deploy(ctx context.Context, n config.Node, o DeployOpts, run Runner, copy Copier) DeployResult {
-	r := DeployResult{Node: n}
+func Deploy(ctx context.Context, n config.Node, o DeployOpts, run Runner, copy Copier) (r DeployResult) {
+	// A named result, so the deferred timer stamps what the caller receives.
+	// As a local it stamped a copy after the return, and the first live deploy
+	// reported "ok in 0s".
+	r = DeployResult{Node: n}
 	start := time.Now()
 	defer func() { r.Elapsed = time.Since(start) }()
 	dctx, cancel := context.WithTimeout(ctx, deployTimeout)

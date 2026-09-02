@@ -157,7 +157,11 @@ func cmdDeploy(ctx context.Context, explicit string, args []string) int {
 	if *withEnv {
 		opts.EnvPath = config.ExpandPath(cfg.EnvFile)
 	}
-	fmt.Fprintf(os.Stderr, "[deploy] roscoe %s + %s to %d node(s)\n", opts.Version, cfgPath, len(nodes))
+	pin := opts.Version
+	if pin == "" {
+		pin = "(latest; this is a dev build with no release to pin)"
+	}
+	fmt.Fprintf(os.Stderr, "[deploy] roscoe %s + %s to %d node(s)\n", pin, cfgPath, len(nodes))
 
 	failed := 0
 	for _, n := range nodes {

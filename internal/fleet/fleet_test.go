@@ -264,6 +264,17 @@ func contains(xs []string, s string) bool {
 	return false
 }
 
+func TestDeployReportsHowLongItTook(t *testing.T) {
+	f := &fakeFleet{answers: map[string]string{}, delay: 20 * time.Millisecond}
+	r := Deploy(context.Background(), nodes()[0], DeployOpts{}, f.run, f.copy)
+	if r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if r.Elapsed < 40*time.Millisecond { // at least install + mkdir + verify
+		t.Errorf("elapsed = %s for three 20ms steps; the timer is not reaching the result", r.Elapsed)
+	}
+}
+
 func TestEnabledAndQuoting(t *testing.T) {
 	en := Enabled(nodes())
 	if len(en) != 2 || en[0].Name != "roscoe" || en[1].Name != "roscoe-2tb" {
