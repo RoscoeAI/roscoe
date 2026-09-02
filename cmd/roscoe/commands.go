@@ -366,6 +366,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 
 	var res *streamjson.ResultEvent
 	var runErr error
+	runResumeBudget, tooLong := 0, 0 // window shrinks when the model refuses it
 	for {
 		taskCtx, cancelTask := context.WithCancel(ctx)
 		var escPressed atomic.Bool
@@ -380,10 +381,25 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		}
 
 		res, runErr = worker.Run(taskCtx,
-			worker.Task{ID: *taskID, Prompt: runPrompt, Dir: *dir, Account: account, Token: token, Resume: runResume, ResumeFrom: runResumeFrom},
+			worker.Task{ID: *taskID, Prompt: runPrompt, Dir: *dir, Account: account, Token: token,
+				Resume: runResume, ResumeFrom: runResumeFrom, ResumeBudget: runResumeBudget},
 			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: onEvent},
 		)
 		cancelTask()
+
+		// The resumed window was refused as too long: free, and roscoe's to
+		// fix. Halve it and send the same prompt again, as chat does.
+		if runErr == nil && ctx.Err() == nil && lastSession != "" && worker.RetryTooLong(res, tooLong) {
+			if cdir, derr := worker.SessionConfigDir(cfg, *taskID, token); derr == nil {
+				if path, ferr := worker.FindSession(cdir, lastSession); ferr == nil {
+					tooLong++
+					runResumeBudget = worker.HalveBudget(runResumeBudget)
+					runResume, runResumeFrom = lastSession, path
+					fmt.Fprintf(os.Stderr, "[resume] the model refused that much history; retrying with the most recent %dKB\n", runResumeBudget/1024)
+					continue
+				}
+			}
+		}
 
 		if escPressed.Load() && ctx.Err() == nil {
 			if res != nil && res.SessionID != "" {

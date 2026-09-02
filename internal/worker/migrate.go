@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"roscoe.sh/roscoe/internal/config"
+	"roscoe.sh/roscoe/internal/streamjson"
 )
 
 // FindSession locates sessionID's transcript under configDir/projects/*/,
@@ -77,6 +78,16 @@ func HalveBudget(current int) int {
 // request for size, which is what an oversized resume window produces.
 func PromptTooLong(result string) bool {
 	return strings.Contains(strings.ToLower(result), "prompt is too long")
+}
+
+// MaxTooLongRetries bounds how many times a caller halves the window and
+// resends before giving the error to the operator.
+const MaxTooLongRetries = 3
+
+// RetryTooLong is the one decision chat and run share: this result is the
+// model refusing the resume window as too long, and we have retries left.
+func RetryTooLong(res *streamjson.ResultEvent, attempt int) bool {
+	return res != nil && res.IsError && PromptTooLong(res.Result) && attempt < MaxTooLongRetries
 }
 
 // Oversized reports whether a session transcript has grown past the point

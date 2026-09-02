@@ -362,7 +362,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 				worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token,
 					Resume: session, ResumeFrom: resumeFrom, ResumeBudget: resumeBudget},
 				opts)
-			if runErr != nil || res == nil || !res.IsError || !worker.PromptTooLong(res.Result) || attempt >= 3 || turnCtx.Err() != nil {
+			if runErr != nil || !worker.RetryTooLong(res, attempt) || turnCtx.Err() != nil {
 				break
 			}
 			dir, derr := worker.SessionConfigDir(cfg, *taskID, token)

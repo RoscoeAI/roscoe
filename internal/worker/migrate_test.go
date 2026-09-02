@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"roscoe.sh/roscoe/internal/streamjson"
 	"runtime"
 	"strings"
 	"testing"
@@ -394,6 +395,27 @@ func TestResumeBudgetIsTokenSafe(t *testing.T) {
 		if PromptTooLong(text) != want {
 			t.Errorf("PromptTooLong(%q) = %v", text, !want)
 		}
+	}
+}
+
+// Chat and run share one retry decision: an error result that says the
+// prompt is too long, while retries remain. Anything else is not retried.
+func TestRetryTooLong(t *testing.T) {
+	tooLong := &streamjson.ResultEvent{IsError: true, Result: "Prompt is too long"}
+	if !RetryTooLong(tooLong, 0) || !RetryTooLong(tooLong, MaxTooLongRetries-1) {
+		t.Error("a too-long error with retries left must retry")
+	}
+	if RetryTooLong(tooLong, MaxTooLongRetries) {
+		t.Error("retries must stop at the cap")
+	}
+	if RetryTooLong(&streamjson.ResultEvent{IsError: true, Result: "rate limited"}, 0) {
+		t.Error("an unrelated error must not shrink the window")
+	}
+	if RetryTooLong(&streamjson.ResultEvent{IsError: false, Result: "Prompt is too long"}, 0) {
+		t.Error("a successful turn that happens to say the phrase is not an error")
+	}
+	if RetryTooLong(nil, 0) {
+		t.Error("nil result")
 	}
 }
 
