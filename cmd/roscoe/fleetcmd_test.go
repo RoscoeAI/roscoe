@@ -11,9 +11,9 @@ import (
 
 func fleetProbes() []fleet.Probe {
 	return []fleet.Probe{
-		{Node: config.Node{Name: "roscoe", SSH: "roscoe-ts", Enabled: true}, Reachable: true, Cores: 28,
+		{Node: config.Node{Name: "roscoe", SSH: "roscoe-ts", Workers: 2, Enabled: true}, Reachable: true, Cores: 28,
 			Claude: "2.1.251 (Claude Code)", LoggedIn: true, Roscoe: "roscoe v0.28.0 (go1.26.7)", HasConfig: true, HasEnv: true},
-		{Node: config.Node{Name: "roscoe-2tb", SSH: "roscoe-2tb-ts", Enabled: true}, Reachable: true, Cores: 28,
+		{Node: config.Node{Name: "roscoe-2tb", SSH: "roscoe-2tb-ts", Workers: 2, Enabled: true}, Reachable: true, Cores: 28,
 			Claude: "2.1.251 (Claude Code)", Roscoe: "roscoe v0.28.0 (go1.26.7)", HasConfig: true, HasEnv: true},
 		{Node: config.Node{Name: "blank", SSH: "blank-ts", Enabled: true}, Reachable: true, Cores: 8, Claude: "missing", Roscoe: "missing"},
 		{Node: config.Node{Name: "off", SSH: "off-ts", Enabled: true}, Err: errors.New("ssh: connect to host off-ts port 22: No route to host")},
@@ -73,6 +73,16 @@ func TestNextStepPointsAtTheRealGap(t *testing.T) {
 	if got := nextStep(ps[:1]); got != "" {
 		t.Errorf("an all-ready fleet still gets a hint: %q", got)
 	}
+	// Ready but keyless: the last thing worth saying, and only when nothing
+	// else is missing, because env is optional and login is not.
+	keyless := ps[0]
+	keyless.HasEnv = false
+	if got := nextStep([]fleet.Probe{keyless}); !strings.Contains(got, "roscoe deploy --env") {
+		t.Errorf("keyless ready node hint = %q", got)
+	}
+	if got := nextStep([]fleet.Probe{keyless, ps[1]}); !strings.Contains(got, "claude auth login") {
+		t.Errorf("login must outrank env: %q", got)
+	}
 	// A disabled node needs nothing, so it must not trigger deploy.
 	if got := nextStep([]fleet.Probe{ps[0], ps[4]}); got != "" {
 		t.Errorf("a disabled node produced the hint %q", got)
@@ -94,6 +104,33 @@ func TestNotReadySaysWhyAndHow(t *testing.T) {
 	got = notReady(ps[3]) // unreachable
 	if !strings.Contains(got, "needs unreachable") {
 		t.Errorf("down node: %q", got)
+	}
+}
+
+// A refused dispatch shows the whole table, so the reason for every node is
+// on screen, then the one command that helps.
+func TestNoNodeFreeShowsEveryReason(t *testing.T) {
+	ps := fleetProbes()
+	ps[0].Busy = 2 // the ready node is full
+	ps[0].Node.Workers = 2
+	got := noNodeFree(ps)
+	for _, want := range []string{"no node can take work", "roscoe       roscoe-ts", "0/2", "no login", "needs roscoe, config, claude, env", "roscoe deploy"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, got)
+		}
+	}
+	// Everything ready but full: the hint is about capacity, not deploy.
+	got = noNodeFree(ps[:1])
+	if !strings.Contains(got, "worker limit") || strings.Contains(got, "roscoe deploy") {
+		t.Errorf("full fleet refusal: %s", got)
+	}
+}
+
+func TestFreeCell(t *testing.T) {
+	p := fleetProbes()[0]
+	p.Node.Workers, p.Busy = 3, 1
+	if got := freeCell(p); got != "2/3" {
+		t.Errorf("freeCell = %q", got)
 	}
 }
 

@@ -61,7 +61,7 @@ func (f *fakeFleet) copy(ctx context.Context, host, local, remote string) error 
 }
 
 const blankNode = "host=roscoe\narch=arm64\ncores=28\nclaude=missing\nroscoe=missing\nconfig=no\nenv=no\n"
-const readyNode = "host=roscoe-2tb\narch=arm64\ncores=28\nclaude=2.1.251 (Claude Code)\nroscoe=roscoe v0.28.0 (go1.26.7)\nlogin=true\nconfig=yes\nenv=yes\n"
+const readyNode = "host=roscoe-2tb\narch=arm64\ncores=28\nclaude=2.1.251 (Claude Code)\nroscoe=roscoe v0.28.0 (go1.26.7)\nlogin=true\nbusy=1\nconfig=yes\nenv=yes\n"
 
 // Deployed but never logged in: what every node looks like right after
 // `roscoe deploy --claude`. Ready must be false with "login" as the reason.
@@ -99,6 +99,12 @@ func TestProbeReadsWhatIsThere(t *testing.T) {
 	}
 	if ready.Roscoe != "roscoe v0.28.0 (go1.26.7)" || !ready.HasEnv {
 		t.Errorf("fields = %+v", ready)
+	}
+	if ready.Busy != 1 || ready.Free() != 1 { // workers: 2, one running
+		t.Errorf("busy=%d free=%d, want 1 and 1", ready.Busy, ready.Free())
+	}
+	if blank.Free() != 2 {
+		t.Errorf("an idle node with workers: 2 has %d free", blank.Free())
 	}
 }
 
@@ -272,6 +278,43 @@ func TestDeployReportsHowLongItTook(t *testing.T) {
 	}
 	if r.Elapsed < 40*time.Millisecond { // at least install + mkdir + verify
 		t.Errorf("elapsed = %s for three 20ms steps; the timer is not reaching the result", r.Elapsed)
+	}
+}
+
+func ready(name string, workers, busy int) Probe {
+	return Probe{Node: config.Node{Name: name, SSH: name + "-ts", Workers: workers, Enabled: true},
+		Reachable: true, Claude: "2.1.251", LoggedIn: true, Roscoe: "roscoe v1", HasConfig: true, Busy: busy}
+}
+
+// Dispatch goes to the node with the most room, never to one that is full,
+// not ready, or configured for no workers; and the same fleet always yields
+// the same answer.
+func TestPick(t *testing.T) {
+	a, b := ready("a", 2, 1), ready("b", 4, 1) // a: 1 free, b: 3 free
+	if p, ok := Pick([]Probe{a, b}); !ok || p.Node.Name != "b" {
+		t.Errorf("picked %v %v, want b (3 free over 1)", p.Node.Name, ok)
+	}
+	tie1, tie2 := ready("zed", 2, 0), ready("amy", 2, 0)
+	if p, _ := Pick([]Probe{tie1, tie2}); p.Node.Name != "amy" {
+		t.Errorf("tie went to %s, want the first by name", p.Node.Name)
+	}
+	full := ready("full", 2, 2)
+	none := ready("none", 0, 0)
+	noLogin := ready("nologin", 2, 0)
+	noLogin.LoggedIn = false
+	down := Probe{Node: config.Node{Name: "down", Workers: 8, Enabled: true}}
+	if p, ok := Pick([]Probe{full, none, noLogin, down}); ok {
+		t.Errorf("picked %s from a fleet with nothing free", p.Node.Name)
+	}
+	if p := full; p.Free() != 0 {
+		t.Errorf("full node has %d free", p.Free())
+	}
+	over := ready("over", 2, 5) // more running than configured, e.g. hand-started
+	if over.Free() != 0 {
+		t.Errorf("oversubscribed node has %d free, want 0 not negative", over.Free())
+	}
+	if _, ok := Pick(nil); ok {
+		t.Error("an empty fleet picked something")
 	}
 }
 

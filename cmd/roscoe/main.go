@@ -85,7 +85,13 @@ func realMain() int {
 		return cmdNode(ctx, *cfgPath, rest)
 	case "deploy":
 		return cmdDeploy(ctx, *cfgPath, rest)
-	case "up", "accounts", "dispatch", "status", "top":
+	case "dispatch":
+		return cmdDispatch(ctx, *cfgPath, rest)
+	case "status":
+		return cmdNode(ctx, *cfgPath, rest)
+	case "up":
+		return cmdUp(ctx, *cfgPath, rest)
+	case "accounts", "top":
 		return cmdStub(cmd)
 	default:
 		fmt.Fprintf(os.Stderr, "roscoe: unknown command %q\n\n", cmd)
@@ -123,8 +129,11 @@ commands:
   version                                 print the roscoe version
   node                                    every machine in nodes[]: reachable, what is installed, ready or not
   deploy [--node N] [--claude] [--env]    put this roscoe version and the config on each enabled node
-  up | accounts | dispatch | status | top
-                                          coming in slice 2 (see ARCHITECTURE.md)
+  dispatch "<prompt>" [--dir D] [--harness H]
+                                          run one task on the node with the most free worker slots
+  status                                  the node table (same as node)
+  up [deploy flags]                       deploy to every enabled node, then show what is left to do
+  accounts | top                          coming (see ARCHITECTURE.md)
 
 --config defaults to ./roscoe.json, falling back to ~/.roscoe/roscoe.json.
 `)

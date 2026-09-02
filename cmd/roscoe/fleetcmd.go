@@ -40,8 +40,9 @@ func cmdNode(ctx context.Context, explicit string, args []string) int {
 // node still needs, since that is the one step deploy cannot do.
 func nextStep(probes []fleet.Probe) string {
 	var needLogin []string
+	needEnv := false
 	for _, p := range probes {
-		if !p.Node.Enabled || p.Ready() {
+		if !p.Node.Enabled || !p.Reachable {
 			continue
 		}
 		for _, m := range p.Missing() {
@@ -50,35 +51,40 @@ func nextStep(probes []fleet.Probe) string {
 				return " Put roscoe on the rest:  roscoe deploy"
 			case "login":
 				needLogin = append(needLogin, p.Node.SSH)
+			case "env":
+				needEnv = true
 			}
 		}
 	}
 	if len(needLogin) > 0 {
 		return fmt.Sprintf(" Log in on each node:  ssh -t %s claude auth login", needLogin[0])
 	}
+	if needEnv { // optional, so last: workers on their own claude login run without it
+		return " Workers there have no API keys (tier 3 routes need them):  roscoe deploy --env"
+	}
 	return ""
 }
 
 func nodesTable(probes []fleet.Probe) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %s\n", "node", "ssh", "cores", "claude", "roscoe", "state")
+	fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %-8s %s\n", "node", "ssh", "cores", "claude", "roscoe", "free", "state")
 	for _, p := range probes {
 		n := p.Node
 		switch {
 		case !n.Enabled:
-			fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %sdisabled%s\n", n.Name, orDash(n.SSH), "-", "-", "-", ansiFaint, ansiReset)
+			fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %-8s %sdisabled%s\n", n.Name, orDash(n.SSH), "-", "-", "-", "-", ansiFaint, ansiReset)
 		case !p.Reachable:
 			why := "unreachable"
 			if p.Err != nil {
 				why = sshReason(p.Err)
 			}
-			fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %s%s%s\n", n.Name, n.SSH, "-", "-", "-", ansiDim, why, ansiReset)
+			fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %-8s %s%s%s\n", n.Name, n.SSH, "-", "-", "-", "-", ansiDim, why, ansiReset)
 		default:
 			state := ansiGreen + "ready" + ansiReset
 			if !p.Ready() {
 				state = ansiDim + "needs " + strings.Join(p.Missing(), ", ") + ansiReset
 			}
-			fmt.Fprintf(&b, "  %-12s %-16s %-9d %-20s %-12s %s\n", n.Name, n.SSH, p.Cores, claudeCell(p), shortVersion(p.Roscoe), state)
+			fmt.Fprintf(&b, "  %-12s %-16s %-9d %-20s %-12s %-8s %s\n", n.Name, n.SSH, p.Cores, claudeCell(p), shortVersion(p.Roscoe), freeCell(p), state)
 		}
 	}
 	return b.String()
@@ -100,6 +106,11 @@ func orDash(s string) string {
 		return "(this machine)"
 	}
 	return s
+}
+
+// freeCell is "free of workers", e.g. "2/2": the number a dispatch reads.
+func freeCell(p fleet.Probe) string {
+	return fmt.Sprintf("%d/%d", p.Free(), p.Node.Workers)
 }
 
 // claudeCell is the version plus whether it can do anything: an installed
@@ -192,15 +203,75 @@ func runOnNode(ctx context.Context, cfg *config.Config, name, prompt string, o f
 		fmt.Fprintf(os.Stderr, "roscoe run: no enabled node named %q; roscoe node lists them\n", name)
 		return 2
 	}
-	n := nodes[0]
 	p := fleet.ProbeAll(ctx, nodes, fleet.SSH)[0]
 	if !p.Ready() {
 		fmt.Fprintln(os.Stderr, notReady(p))
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "[node] %s (%s) · claude %s · roscoe %s · task %s · dir %s\n",
-		n.Name, n.SSH, shortVersion(p.Claude), shortVersion(p.Roscoe), o.TaskID, o.DisplayDir())
+	return execOnNode(ctx, p, prompt, o)
+}
+
+// execOnNode runs the task on an already-probed node.
+func execOnNode(ctx context.Context, p fleet.Probe, prompt string, o fleet.RemoteOpts) int {
+	n := p.Node
+	fmt.Fprintf(os.Stderr, "[node] %s (%s) · claude %s · roscoe %s · %s free · task %s · dir %s\n",
+		n.Name, n.SSH, shortVersion(p.Claude), shortVersion(p.Roscoe), freeCell(p), o.TaskID, o.DisplayDir())
 	return fleet.Exec(ctx, n, fleet.RemoteRun(prompt, o), isTTY(os.Stdin) && isTTY(os.Stdout))
+}
+
+// cmdDispatch runs one task on whichever enabled node has the most free
+// worker slots. It is `run --node` with the node chosen for you.
+func cmdDispatch(ctx context.Context, explicit string, args []string) int {
+	fs := flag.NewFlagSet("dispatch", flag.ExitOnError)
+	taskID := fs.String("task-id", "", "task id (default: generated)")
+	dir := fs.String("dir", "", "working directory on the node (default: ~/.roscoe/work/<task-id>)")
+	harness := fs.String("harness", "", `worker harness on the node: "claude" or "codex" (default: the node's config)`)
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, `usage: roscoe dispatch "<prompt>" [--task-id X] [--dir D] [--harness H]`)
+		return 2
+	}
+	prompt := fs.Arg(0)
+	cfg, _, _, err := loadConfigAndEnv(explicit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "roscoe dispatch: %v\n", err)
+		return 1
+	}
+	nodes := fleet.Enabled(cfg.Nodes)
+	if len(nodes) == 0 {
+		fmt.Fprintln(os.Stderr, "roscoe dispatch: no enabled nodes with an ssh alias; add machines under nodes[]")
+		return 2
+	}
+	probes := fleet.ProbeAll(ctx, nodes, fleet.SSH)
+	p, ok := fleet.Pick(probes)
+	if !ok {
+		fmt.Fprint(os.Stderr, noNodeFree(probes))
+		return 1
+	}
+	if *taskID == "" {
+		*taskID = newTaskID()
+	}
+	return execOnNode(ctx, p, prompt, fleet.RemoteOpts{TaskID: *taskID, Dir: *dir, Harness: *harness})
+}
+
+// noNodeFree explains a refused dispatch: the table, so every node's reason
+// is visible at once, then the one command that helps.
+func noNodeFree(probes []fleet.Probe) string {
+	msg := "roscoe dispatch: no node can take work right now\n" + nodesTable(probes)
+	if hint := nextStep(probes); hint != "" {
+		return msg + "\n " + strings.TrimSpace(hint) + "\n"
+	}
+	return msg + "\n every ready node is at its worker limit; wait, or raise nodes[].workers\n"
+}
+
+// cmdUp brings the fleet to ready as far as software can: deploy to every
+// enabled node, then show the table with what is left (usually a login).
+func cmdUp(ctx context.Context, explicit string, args []string) int {
+	if code := cmdDeploy(ctx, explicit, args); code != 0 {
+		return code
+	}
+	fmt.Fprintln(os.Stderr)
+	return cmdNode(ctx, explicit, nil)
 }
 
 // notReady says why a node cannot take work and what fixes it, in one line.

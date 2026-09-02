@@ -61,7 +61,8 @@ Deviation is the point in these:
 - **A fleet across machines.** `node` shows every configured machine and
   what it needs; `deploy` puts roscoe there pinned to your version;
   `run --node` runs a task on one of them with the stream and your keys
-  passing through ssh. Scheduling across nodes (`up`, `dispatch`) is next.
+  passing through ssh; `dispatch` picks the node with the most free worker
+  slots for you.
 - **Memory that compounds.** A Graphify knowledge graph under `~/.roscoe`.
   Planned.
 - **Either harness.** Claude Code or Codex workers behind one interface.

@@ -47,6 +47,7 @@ const probeScript = userPath + `echo "host=$(hostname 2>/dev/null)"; ` +
 	`echo "claude=$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -1 || echo missing)"; ` +
 	`echo "roscoe=$(command -v roscoe >/dev/null 2>&1 && roscoe version 2>/dev/null || echo missing)"; ` +
 	`echo "login=$(command -v claude >/dev/null 2>&1 && claude auth status 2>/dev/null </dev/null | tr -d ' \n' | grep -o '"loggedIn":[a-z]*' | cut -d: -f2)"; ` +
+	`echo "busy=$(pgrep -f '[r]oscoe run ' 2>/dev/null | wc -l | tr -d ' ')"; ` +
 	`echo "config=$([ -f "$HOME/.roscoe/roscoe.json" ] && echo yes || echo no)"; ` +
 	`echo "env=$([ -f "$HOME/.roscoe/.env" ] && echo yes || echo no)"`
 
@@ -60,6 +61,7 @@ type Probe struct {
 	Claude    string // version, "missing", or "" when unreachable
 	LoggedIn  bool   // claude auth status said loggedIn:true
 	Roscoe    string
+	Busy      int // roscoe run processes on the node right now
 	HasConfig bool
 	HasEnv    bool
 	Err       error
@@ -76,6 +78,32 @@ func (p Probe) Ready() bool {
 }
 
 func (p Probe) hasClaude() bool { return p.Claude != "" && p.Claude != "missing" }
+
+// Free is how many more workers the node will take: its configured worker
+// count less what is running. A node with workers: 0 never takes work.
+func (p Probe) Free() int {
+	if n := p.Node.Workers - p.Busy; n > 0 {
+		return n
+	}
+	return 0
+}
+
+// Pick chooses the node for one more task: ready, with a free slot, and the
+// most free slots of those; ties go to the name that sorts first so the
+// choice is stable. ok is false when no node can take work.
+func Pick(probes []Probe) (Probe, bool) {
+	var best Probe
+	ok := false
+	for _, p := range probes {
+		if !p.Ready() || p.Free() == 0 {
+			continue
+		}
+		if !ok || p.Free() > best.Free() || (p.Free() == best.Free() && p.Node.Name < best.Node.Name) {
+			best, ok = p, true
+		}
+	}
+	return best, ok
+}
 
 // Missing lists what stops the node being Ready, in the order deploy would
 // fix it.
@@ -152,6 +180,8 @@ func probeOne(ctx context.Context, n config.Node, run Runner) Probe {
 			p.Roscoe = v
 		case "login":
 			p.LoggedIn = v == "true"
+		case "busy":
+			p.Busy, _ = strconv.Atoi(v)
 		case "config":
 			p.HasConfig = v == "yes"
 		case "env":
