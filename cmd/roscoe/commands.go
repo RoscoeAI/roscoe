@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -344,6 +345,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 
 	runPrompt, runResume, runResumeFrom := prompt, *resume, resumeFrom
 	var lastSession string
+	nar := &narrator{}
 	onEvent := func(ev *streamjson.Event) {
 		if ie, ok := ev.AsInit(); ok {
 			if ie.SessionID != "" {
@@ -351,7 +353,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 			}
 			learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
 		}
-		narrate(ev)
+		nar.event(ev)
 	}
 
 	var res *streamjson.ResultEvent
@@ -417,11 +419,18 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		return 1
 	}
 
-	out := res.Result
-	if out != "" && !strings.HasSuffix(out, "\n") {
-		out += "\n"
+	// stdout carries the answer: that is roscoe run's contract for scripts and
+	// pipes. The stream on stderr is for a person watching. When stdout is
+	// the same terminal, the person has already read the answer as it was
+	// written, and printing it again shows it twice; when stdout is a pipe,
+	// the consumer still needs it.
+	if !(nar.StreamedAny() && isTTY(os.Stdout)) {
+		out := res.Result
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		os.Stdout.WriteString(out)
 	}
-	os.Stdout.WriteString(out)
 
 	status := "done"
 	if res.IsError {
@@ -462,36 +471,6 @@ func resolveMiddleAccount(cfg *config.Config, env map[string]string) (name, toke
 	return "", ""
 }
 
-// narrateTo prints one readable line per stream-json event onto a pinned
-// screen (chat), keeping the prompt row intact.
-func narrateTo(sc *screen, ev *streamjson.Event) {
-	if ev == nil {
-		return
-	}
-	if ie, ok := ev.AsInit(); ok {
-		sc.Printf("%s%s · session %s%s", ansiFaint, ie.Model, shortID(ie.SessionID), ansiReset)
-		return
-	}
-	if re, ok := ev.AsResult(); ok {
-		_ = re
-		return // the caller prints the answer and cost
-	}
-	switch ev.Type {
-	case "assistant":
-		text, tools := assistantContent(ev.Raw)
-		switch {
-		case text != "":
-			sc.Printf("%s%s%s", ansiDim, snippet(text), ansiReset)
-		case len(tools) > 0:
-			sc.Printf("%s· %s%s", ansiFaint, strings.Join(tools, ", "), ansiReset)
-		}
-	case "system":
-		if ev.Subtype == "api_retry" {
-			sc.Printf("%s· retrying after an API error%s", ansiFaint, ansiReset)
-		}
-	}
-}
-
 func shortID(s string) string {
 	if len(s) > 8 {
 		return s[:8]
@@ -500,11 +479,86 @@ func shortID(s string) string {
 }
 
 // narrate prints one readable line per stream-json event to stderr.
-func narrate(ev *streamjson.Event) {
+// narrator renders worker events for a person. With a screen it writes into
+// the TUI; without one it writes plain lines to stderr. It is stateful because
+// streaming needs memory: once a message's text has arrived as deltas, the
+// whole-message event that follows must not print that text a second time.
+type narrator struct {
+	sc *screen
+	// errW is where the plain (no-screen) path writes; nil means stderr.
+	// Tests inject a buffer.
+	errW io.Writer
+	// midLine is true after a delta was written to errW without a trailing
+	// newline, so the next whole line knows to start on a fresh one rather
+	// than gluing "[rate_limit_event]" onto a half-written sentence.
+	midLine bool
+	// streamed is set while the current assistant message's text has been
+	// arriving as deltas; streamedAny records that any text streamed this
+	// turn, so a caller can skip re-printing the final result.
+	streamed    bool
+	streamedAny bool
+}
+
+// StreamedAny reports whether any assistant text was streamed this turn.
+func (n *narrator) StreamedAny() bool { return n != nil && n.streamedAny }
+
+// event renders one worker event.
+func (n *narrator) event(ev *streamjson.Event) {
 	if ev == nil {
 		return
 	}
-	w := os.Stderr
+	// Streamed text: only the top-level conversation. Subagent chatter is
+	// forwarded too, and letting every parallel worker append to one line
+	// would make the line unreadable.
+	if d, ok := ev.AsTextDelta(); ok {
+		if d.ParentToolUseID != "" || d.Text == "" {
+			return
+		}
+		n.streamed, n.streamedAny = true, true
+		if n.sc != nil {
+			n.sc.Stream(d.Text, "")
+		} else {
+			fmt.Fprint(n.ew(), d.Text)
+			n.midLine = true
+		}
+		return
+	}
+	if ev.IsStreamEnd() {
+		if n.streamed {
+			if n.sc != nil {
+				n.sc.EndStream()
+			} else {
+				n.endLine()
+			}
+		}
+		return
+	}
+	if n.sc != nil {
+		n.toScreen(ev)
+	} else {
+		n.toStderr(ev)
+	}
+}
+
+func (n *narrator) ew() io.Writer {
+	if n.errW != nil {
+		return n.errW
+	}
+	return os.Stderr
+}
+
+// endLine finishes a streamed line on the plain path, once.
+func (n *narrator) endLine() {
+	if n.midLine {
+		fmt.Fprintln(n.ew())
+		n.midLine = false
+	}
+}
+
+func (n *narrator) toStderr(ev *streamjson.Event) {
+	w := n.ew()
+	// Anything printed as a whole line must not land mid-sentence.
+	n.endLine()
 	switch {
 	case ev.Type == "system" && ev.Subtype == "init":
 		if ie, ok := ev.AsInit(); ok {
@@ -526,12 +580,14 @@ func narrate(ev *streamjson.Event) {
 
 	case ev.Type == "assistant":
 		text, tools := assistantContent(ev.Raw)
+		wasStreamed := n.streamed
+		n.streamed = false
 		switch {
-		case text != "":
+		case text != "" && !wasStreamed:
 			fmt.Fprintf(w, "[assistant] %s\n", snippet(text))
 		case len(tools) > 0:
 			fmt.Fprintf(w, "[assistant] tool_use: %s\n", strings.Join(tools, ", "))
-		default:
+		case text == "" && !wasStreamed:
 			fmt.Fprintln(w, "[assistant]")
 		}
 
@@ -546,6 +602,9 @@ func narrate(ev *streamjson.Event) {
 		}
 		fmt.Fprintln(w, "[result]")
 
+	case ev.Type == "stream_event":
+		// Block starts, message metadata: nothing a person needs to see.
+
 	default:
 		if ev.Subtype != "" {
 			fmt.Fprintf(w, "[%s/%s]\n", ev.Type, ev.Subtype)
@@ -554,6 +613,39 @@ func narrate(ev *streamjson.Event) {
 		}
 	}
 }
+
+func (n *narrator) toScreen(ev *streamjson.Event) {
+	sc := n.sc
+	if ie, ok := ev.AsInit(); ok {
+		sc.Printf("%s%s · session %s%s", ansiFaint, ie.Model, shortID(ie.SessionID), ansiReset)
+		return
+	}
+	if _, ok := ev.AsResult(); ok {
+		return // the caller prints the answer (if it was not streamed) and the cost
+	}
+	switch ev.Type {
+	case "assistant":
+		text, tools := assistantContent(ev.Raw)
+		wasStreamed := n.streamed
+		n.streamed = false
+		switch {
+		case text != "" && !wasStreamed:
+			sc.Printf("%s%s%s", ansiDim, snippet(text), ansiReset)
+		case len(tools) > 0:
+			sc.Printf("%s· %s%s", ansiFaint, strings.Join(tools, ", "), ansiReset)
+		}
+	case "system":
+		if ev.Subtype == "api_retry" {
+			sc.Printf("%s· retrying after an API error%s", ansiFaint, ansiReset)
+		}
+	}
+}
+
+// narrate and narrateTo keep the old call shape for callers that do not need
+// to ask about streaming afterwards.
+func narrate(ev *streamjson.Event) { (&narrator{}).event(ev) }
+
+func narrateTo(sc *screen, ev *streamjson.Event) { (&narrator{sc: sc}).event(ev) }
 
 // assistantContent pulls text and tool_use names out of an assistant event
 // without depending on the full message schema.

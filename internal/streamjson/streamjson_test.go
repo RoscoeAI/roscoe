@@ -303,3 +303,54 @@ func TestNextMultipleEventsInOrder(t *testing.T) {
 		t.Fatalf("trailing Next err = %v, want io.EOF", err)
 	}
 }
+
+// Shapes recorded from a real `--include-partial-messages` run.
+func TestAsTextDelta(t *testing.T) {
+	delta := `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"alpha "}},"session_id":"s","parent_tool_use_id":null,"uuid":"u"}`
+	ev := &Event{Type: "stream_event", Raw: []byte(delta)}
+	d, ok := ev.AsTextDelta()
+	if !ok || d.Text != "alpha " || d.ParentToolUseID != "" {
+		t.Errorf("delta = %+v ok=%v", d, ok)
+	}
+
+	sub := `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}},"parent_tool_use_id":"toolu_123"}`
+	d, ok = (&Event{Type: "stream_event", Raw: []byte(sub)}).AsTextDelta()
+	if !ok || d.ParentToolUseID != "toolu_123" {
+		t.Errorf("subagent delta = %+v ok=%v; the parent id must survive so it can be filtered", d, ok)
+	}
+
+	for name, raw := range map[string]string{
+		"block start":   `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text","text":""}}}`,
+		"input delta":   `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}`,
+		"message start": `{"type":"stream_event","event":{"type":"message_start"}}`,
+		"assistant":     `{"type":"assistant","message":{"content":[{"type":"text","text":"whole"}]}}`,
+	} {
+		if _, ok := (&Event{Type: typeOf(raw), Raw: []byte(raw)}).AsTextDelta(); ok {
+			t.Errorf("%s was read as a text delta", name)
+		}
+	}
+	if (*Event)(nil).IsStreamEnd() {
+		t.Error("nil event is a stream end")
+	}
+}
+
+func TestIsStreamEnd(t *testing.T) {
+	for raw, want := range map[string]bool{
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`: true,
+		`{"type":"stream_event","event":{"type":"message_stop"}}`:                 true,
+		`{"type":"stream_event","event":{"type":"content_block_delta"}}`:          false,
+		`{"type":"assistant"}`: false,
+	} {
+		if got := (&Event{Type: typeOf(raw), Raw: []byte(raw)}).IsStreamEnd(); got != want {
+			t.Errorf("IsStreamEnd(%s) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func typeOf(raw string) string {
+	var r struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal([]byte(raw), &r)
+	return r.Type
+}

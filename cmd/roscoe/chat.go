@@ -335,6 +335,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		ti := &turnInput{}
 		inputDone := make(chan pending, 1)
 		go func() { inputDone <- ti.run(turnCtx, sc, keys, cancelTurn) }()
+		nar := &narrator{sc: sc} // per turn: streaming state must not leak across turns
 
 		res, runErr := worker.Run(turnCtx,
 			worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token, Resume: session, ResumeFrom: resumeFrom},
@@ -382,8 +383,14 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case runErr != nil:
 			sc.Printf("%serror · %v%s", ansiGreen, runErr, ansiReset)
 		case res != nil:
-			for _, l := range strings.Split(strings.TrimSpace(res.Result), "\n") {
-				sc.Print(l)
+			// The reply was watched as it was written; printing it again
+			// would show it twice. A turn that streamed nothing (tool-only, or
+			// an older harness without partial messages) still gets it here.
+			sc.EndStream()
+			if !nar.StreamedAny() {
+				for _, l := range strings.Split(strings.TrimSpace(res.Result), "\n") {
+					sc.Print(l)
+				}
 			}
 			spent += res.TotalCostUSD
 			turns++

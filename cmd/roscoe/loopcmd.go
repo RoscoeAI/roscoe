@@ -116,6 +116,7 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 	dispatch := func(ctx context.Context, it loop.Iteration, prompt, resume string) (*streamjson.ResultEvent, string, error) {
 		fmt.Fprintf(os.Stderr, "\n[iteration %d]\n", it.N)
 		session := ""
+		nar := &narrator{}
 		onEvent := func(ev *streamjson.Event) {
 			if ie, ok := ev.AsInit(); ok {
 				if ie.SessionID != "" {
@@ -124,7 +125,7 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 				// The harness just told us what the alias resolves to.
 				learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
 			}
-			narrate(ev)
+			nar.event(ev)
 		}
 		if !canResume {
 			resume = ""

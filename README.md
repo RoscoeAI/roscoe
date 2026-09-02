@@ -140,6 +140,9 @@ above the prompt describes whatever you are pointing at as you type.
 /config tiers.middle.effort high
 ```
 
+The reply streams as it is written rather than landing whole at the end of
+the turn, so a long answer is watched rather than waited for.
+
 Finding a conversation again does not need its id. `roscoe sessions` lists what
 has run, newest first, with what each cost and the first thing you said;
 `roscoe chat --last` resumes the newest, and `roscoe chat --pick` offers a

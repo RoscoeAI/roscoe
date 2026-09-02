@@ -103,3 +103,56 @@ func (e *Event) AsInit() (*InitEvent, bool) {
 	}
 	return &ie, true
 }
+
+// TextDelta is one streamed chunk of assistant text, emitted when the harness
+// runs with --include-partial-messages. It is the unit that lets a long answer
+// appear as it is written rather than landing whole at the end of the turn.
+type TextDelta struct {
+	Text string
+	// ParentToolUseID is set when the text belongs to a subagent forwarded by
+	// --forward-subagent-text. The top-level conversation streams; subagent
+	// chatter does not, or every parallel worker would write over one line.
+	ParentToolUseID string
+}
+
+// AsTextDelta decodes a stream_event carrying a text_delta. Other stream
+// events (block starts and stops, message metadata) return false.
+func (e *Event) AsTextDelta() (TextDelta, bool) {
+	if e == nil || e.Type != "stream_event" {
+		return TextDelta{}, false
+	}
+	var rec struct {
+		Parent string `json:"parent_tool_use_id"`
+		Event  struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(e.Raw, &rec); err != nil {
+		return TextDelta{}, false
+	}
+	if rec.Event.Type != "content_block_delta" || rec.Event.Delta.Type != "text_delta" {
+		return TextDelta{}, false
+	}
+	return TextDelta{Text: rec.Event.Delta.Text, ParentToolUseID: rec.Parent}, true
+}
+
+// IsStreamEnd reports the stream events that close a streamed text block, so
+// a renderer knows the in-place line is finished.
+func (e *Event) IsStreamEnd() bool {
+	if e == nil || e.Type != "stream_event" {
+		return false
+	}
+	var rec struct {
+		Event struct {
+			Type string `json:"type"`
+		} `json:"event"`
+	}
+	if json.Unmarshal(e.Raw, &rec) != nil {
+		return false
+	}
+	return rec.Event.Type == "content_block_stop" || rec.Event.Type == "message_stop"
+}

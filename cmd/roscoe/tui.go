@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -43,6 +44,7 @@ const (
 // tail unless the operator has scrolled back.
 type screen struct {
 	mu     sync.Mutex
+	out    io.Writer // the terminal; tests point it at io.Discard
 	rows   int
 	cols   int
 	prompt string
@@ -59,12 +61,28 @@ type screen struct {
 	// scrollback: a panel that survives resizes and prompt redraws without
 	// disturbing the conversation underneath.
 	overlay []string
+
+	// live is text still being streamed into the last line(s) of the
+	// scrollback; liveStart is the index of its first wrapped line, or -1
+	// when nothing is streaming. Streamed text is appended in place so an
+	// answer appears as it is written rather than landing whole at the end.
+	live      []rune
+	liveStart int
+	liveStyle string
 }
 
 func newScreen() *screen {
-	s := &screen{}
+	s := &screen{liveStart: -1, out: os.Stdout}
 	s.measure()
 	return s
+}
+
+// w is where paints go; a screen built without one paints to stdout.
+func (s *screen) w() io.Writer {
+	if s.out == nil {
+		return os.Stdout
+	}
+	return s.out
 }
 
 func (s *screen) measure() {
@@ -114,7 +132,7 @@ func (s *screen) Enter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = true
-	fmt.Fprint(os.Stdout, "\x1b[2J"+bracketedPasteOn)
+	fmt.Fprint(s.w(), "\x1b[2J"+bracketedPasteOn)
 	s.repaintLocked()
 }
 
@@ -126,7 +144,7 @@ func (s *screen) Leave() {
 		return
 	}
 	s.active = false
-	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s\n", bracketedPasteOff, s.rows, ansiClrEOL, ansiShow)
+	fmt.Fprintf(s.w(), "%s\x1b[%d;1H%s%s\n", bracketedPasteOff, s.rows, ansiClrEOL, ansiShow)
 }
 
 // Print appends output. Long lines are wrapped here so scroll math matches
@@ -135,9 +153,10 @@ func (s *screen) Print(line string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
-		fmt.Fprintln(os.Stdout, line)
+		fmt.Fprintln(s.w(), line)
 		return
 	}
+	s.endStreamLocked()
 	s.lines = append(s.lines, wrapVisible(line, s.cols)...)
 	const maxScrollback = 5000
 	if len(s.lines) > maxScrollback {
@@ -146,6 +165,57 @@ func (s *screen) Print(line string) {
 	if s.offset == 0 { // following the tail
 		s.repaintLocked()
 	}
+}
+
+// Stream appends text to the line currently being streamed, starting one if
+// none is. The wrapped lines are recomputed each time so long answers wrap
+// exactly as Print would have wrapped them once finished.
+func (s *screen) Stream(text, style string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		fmt.Fprint(s.w(), text)
+		return
+	}
+	if s.liveStart < 0 {
+		s.liveStart = len(s.lines)
+		s.live = nil
+		s.liveStyle = style
+	}
+	s.live = append(s.live, []rune(text)...)
+	wrapped := wrapVisible(s.liveStyle+string(s.live)+ansiReset, s.cols)
+	s.lines = append(s.lines[:s.liveStart], wrapped...)
+	if s.offset == 0 {
+		s.repaintLocked()
+	}
+}
+
+// EndStream finishes the streamed line. Idempotent; a stream never started
+// is nothing to end.
+func (s *screen) EndStream() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active && s.liveStart < 0 {
+		return
+	}
+	s.endStreamLocked()
+}
+
+func (s *screen) endStreamLocked() {
+	if s.liveStart < 0 {
+		return
+	}
+	if !s.active {
+		fmt.Fprintln(s.w())
+	}
+	s.live, s.liveStart = nil, -1
+}
+
+// Streaming reports whether text is mid-stream.
+func (s *screen) Streaming() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.liveStart >= 0
 }
 
 func (s *screen) Printf(format string, args ...any) {
@@ -246,7 +316,7 @@ func (s *screen) repaintLocked() {
 			b.WriteString(view[i])
 		}
 	}
-	fmt.Fprint(os.Stdout, b.String())
+	fmt.Fprint(s.w(), b.String())
 	s.drawBoxLocked()
 }
 
@@ -330,7 +400,7 @@ func (s *screen) drawBoxLocked() {
 	fmt.Fprintf(&b, "\x1b[%d;1H%s%s╰%s╯%s", s.rows, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
 	// Put the terminal cursor at the insertion point.
 	fmt.Fprintf(&b, "\x1b[%d;%dH%s", top+1+(curLine-vstart), 3+lw+(curCol-ws), ansiShow)
-	fmt.Fprint(os.Stdout, b.String())
+	fmt.Fprint(s.w(), b.String())
 }
 
 // Resize re-measures and repaints; wrapped lines keep their old width, which

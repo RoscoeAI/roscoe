@@ -188,6 +188,9 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			"-p", t.Prompt,
 			"--output-format", "stream-json",
 			"--verbose",
+			// Text deltas as they are written, so a long answer is watched
+			// rather than waited for. Only meaningful with stream-json.
+			"--include-partial-messages",
 			"--forward-subagent-text",
 			"--permission-mode", mid.PermissionMode,
 			"--allowedTools", strings.Join(mid.AllowedTools, ","),
