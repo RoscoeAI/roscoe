@@ -80,7 +80,16 @@ func cmdModels(ctx context.Context, explicit string, args []string) int {
 		{"tier 2", cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model},
 		{"tier 3", cfg.Tiers.Subagents.Provider, cfg.Tiers.Subagents.Model},
 	} {
-		fmt.Printf("%s  %s\n", t.label, cat.Describe(t.prov, t.model))
+		line := cat.Describe(t.prov, t.model)
+		if t.label == "tier 2" && cfg.Tiers.Middle.Harness == "codex" {
+			// codex emits no model event; this is what it will run, and why.
+			m, passed := models.CodexModel(t.model)
+			line = m + "  (codex)"
+			if !passed {
+				line += "  from ~/.codex/config.toml; tiers.middle.model is a claude name and is not passed"
+			}
+		}
+		fmt.Printf("%s  %s\n", t.label, line)
 	}
 	return 0
 }

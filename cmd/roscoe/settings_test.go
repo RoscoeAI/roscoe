@@ -246,3 +246,43 @@ func TestLeanRowExplainsItself(t *testing.T) {
 	}
 	t.Fatal("no lean row")
 }
+
+// Under the codex harness the configured model may be a claude leftover that
+// codex never sees. The row must name what codex will actually run and never
+// show "sonnet" against a harness that has never heard of it.
+func TestMiddleModelRowUnderCodex(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no ~/.codex/config.toml
+	cfg := config.Default()
+	cfg.Tiers.Middle.Harness = "codex"
+	cfg.Tiers.Middle.Model = "sonnet"
+
+	var row settingRow
+	for _, r := range settingsRows(cfg) {
+		if r.path == "tiers.middle.model" {
+			row = r
+		}
+	}
+	if row.path == "" {
+		t.Fatal("no tier 2 model row")
+	}
+	shown := row.shown()
+	if strings.HasPrefix(shown, "sonnet") {
+		t.Errorf("tier 2 row shows %q under codex; codex never runs sonnet", shown)
+	}
+	if !strings.Contains(shown, "codex") {
+		t.Errorf("tier 2 row %q should say the model is codex's own", shown)
+	}
+	// The stored value is untouched: the row displays reality, it does not
+	// rewrite config behind the operator's back.
+	if row.raw != "sonnet" {
+		t.Errorf("raw = %q, want the configured value preserved", row.raw)
+	}
+
+	// A real codex model is shown as itself and passed through.
+	cfg.Tiers.Middle.Model = "gpt-5.6-sol"
+	for _, r := range settingsRows(cfg) {
+		if r.path == "tiers.middle.model" && r.shown() != "gpt-5.6-sol" {
+			t.Errorf("explicit codex model shows %q", r.shown())
+		}
+	}
+}

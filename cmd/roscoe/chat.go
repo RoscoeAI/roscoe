@@ -632,9 +632,13 @@ func fleetLine(cfg *config.Config) string {
 	if effort == "" {
 		effort = "default effort"
 	}
+	mid := cfg.Tiers.Middle.Model
+	if harnessOf(cfg) == "codex" {
+		mid, _ = models.CodexModel(mid)
+	}
 	return fmt.Sprintf("%stier 1 %s · tier 2 %s %s · tier 3 %s %d wide · autonomy %d%s   %s/settings%s",
 		ansiFaint, cfg.Tiers.Main.Model,
-		cfg.Tiers.Middle.Model, effort,
+		mid, effort,
 		shortModel(cfg.Tiers.Subagents.Model), cfg.Tiers.Subagents.MaxConcurrent,
 		cfg.Autonomy.Level, ansiReset, ansiDim, ansiReset)
 }

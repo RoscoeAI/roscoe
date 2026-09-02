@@ -624,3 +624,55 @@ func TestBuildAgentsJSON(t *testing.T) {
 		t.Errorf("empty agents = %q, want {}", empty)
 	}
 }
+
+// codexArgs runs one codex-harness task against the stub and returns the argv
+// it received. The stub emits a claude init line and no -o file, so Run has no
+// result to return; that error is expected and irrelevant to the args.
+func codexArgs(t *testing.T, model string) []string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir()) // no ~/.codex/config.toml can leak in
+	s := newStubRun(t)
+	s.cfg.Tiers.Middle.Harness = "codex"
+	s.cfg.Tiers.Middle.Model = model
+	s.opts.CodexBin = filepath.Join(filepath.Dir(s.outDir), "claude-stub")
+	t.Setenv("ROSCOE_STUB_MODE", "noresult")
+	_, _ = Run(context.Background(), Task{ID: "codex-1", Prompt: "hi"}, s.opts)
+	raw, err := os.ReadFile(filepath.Join(s.outDir, "args"))
+	if err != nil {
+		t.Fatalf("stub recorded no args: %v", err)
+	}
+	return strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+}
+
+func indexOf(args []string, want string) int {
+	for i, a := range args {
+		if a == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// tiers.middle.model was silently ignored under codex: no -m was ever passed,
+// so codex ran its own config's model while /settings showed something else.
+func TestCodexPassesConfiguredModel(t *testing.T) {
+	args := codexArgs(t, "gpt-5.6-sol")
+	i := indexOf(args, "-m")
+	if i < 0 || i+1 >= len(args) || args[i+1] != "gpt-5.6-sol" {
+		t.Errorf("args = %q; want -m gpt-5.6-sol", args)
+	}
+	if args[0] != "exec" || indexOf(args, "--json") < 0 {
+		t.Errorf("codex invocation shape changed: %q", args)
+	}
+}
+
+// A claude alias left over from the default must never reach codex, which
+// would reject it; codex falls back to its own configured model instead.
+func TestCodexNeverReceivesAClaudeName(t *testing.T) {
+	for _, leftover := range []string{"sonnet", "claude-sonnet-5", ""} {
+		args := codexArgs(t, leftover)
+		if i := indexOf(args, "-m"); i >= 0 {
+			t.Errorf("model %q: codex was passed -m %q", leftover, args[i+1])
+		}
+	}
+}

@@ -199,7 +199,10 @@ completion), `memory` (the Graphify knowledge graph), `run` (single-node; Claude
 workers with full subagent swarms, or Codex workers via `--harness codex` /
 `tiers.middle.harness`), `notify`,
 `upgrade` + `relay` (hosted SMS), `version`. Codex workers are single-agent
-for now: the tier-3 swarm and `--resume` are Claude Code features. In
+for now: the tier-3 swarm and `--resume` are Claude Code features. Under
+`harness: codex`, `tiers.middle.model` is passed through when it is a codex
+model; a claude alias left over from the default is not, and the settings
+screen names the model codex will actually run instead. In
 flight: multi-node ssh fan-out (`up`/`node`/`deploy`), the account vault
 (`accounts`), MCP dispatch into your interactive session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).

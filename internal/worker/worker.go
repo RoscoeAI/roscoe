@@ -20,6 +20,7 @@ import (
 
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
+	"roscoe.sh/roscoe/internal/models"
 	"roscoe.sh/roscoe/internal/streamjson"
 )
 
@@ -159,6 +160,14 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 		}
 		codexLastMsg = filepath.Join(filepath.Dir(ccfgDir), "last-message.txt")
 		args = []string{"exec", "--json", "--skip-git-repo-check", "-o", codexLastMsg}
+		// tiers.middle.model was silently ignored here: no -m was ever passed,
+		// so codex ran whatever its own config named while /settings showed
+		// "sonnet". Pass the configured model when it is a codex one; a claude
+		// alias left over from the default is never handed to codex, which
+		// would reject it, and the panel shows what codex will really run.
+		if m, pass := models.CodexModel(mid.Model); pass {
+			args = append(args, "-m", m)
+		}
 		if t.Dir != "" {
 			args = append(args, "-C", t.Dir)
 		}

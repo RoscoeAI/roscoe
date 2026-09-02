@@ -67,7 +67,7 @@ func settingsRowsWith(cfg *config.Config, cat *models.Catalog) []settingRow {
 
 		{heading: "tier 2   workers, one spawned per task"},
 		{label: "model", path: "tiers.middle.model", raw: cfg.Tiers.Middle.Model,
-			display: show(cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model), choices: modelList},
+			display: middleModelDisplay(cfg, show), choices: modelList},
 		{label: "provider", path: "tiers.middle.provider", raw: cfg.Tiers.Middle.Provider, choices: providers},
 		{label: "effort", path: "tiers.middle.effort", raw: cfg.Tiers.Middle.Effort, display: effortDisplay(cfg.Tiers.Middle.Effort), choices: config.EffortLevels()},
 		{label: "harness", path: "tiers.middle.harness", raw: harnessOf(cfg), choices: []string{"claude", "codex"}},
@@ -117,6 +117,20 @@ func effortDisplay(e string) string {
 		return e
 	}
 	return "claude's default"
+}
+
+// middleModelDisplay says what tier 2 will actually run. Under codex the
+// configured value may be a claude leftover that codex never sees, in which
+// case the row names codex's own model rather than lying with "sonnet".
+func middleModelDisplay(cfg *config.Config, show func(provider, alias string) string) string {
+	if harnessOf(cfg) == "codex" {
+		m, passed := models.CodexModel(cfg.Tiers.Middle.Model)
+		if passed {
+			return m
+		}
+		return m + "   (codex's own; tiers.middle.model is a claude name)"
+	}
+	return show(cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model)
 }
 
 func harnessOf(cfg *config.Config) string {
