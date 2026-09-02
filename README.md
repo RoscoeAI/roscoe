@@ -116,6 +116,12 @@ Up and down move, left and right step through a setting's values, enter types
 one in, esc closes. Every change is validated and written to `roscoe.json` as
 you make it.
 
+A chat's transcript is kept from growing without bound. `--resume` trims a large
+session to its recent messages on import, and after every turn roscoe checks
+the size again and trims before the next one, so a long conversation costs what
+its recent context costs rather than everything it has ever said. You are told
+when it happens.
+
 For everything outside those tiers there is `/config`, which walks the whole
 schema the same way: it lists the top-level keys with a line on what each one
 is, naming one goes a level deeper, tab completes and descends, and the line

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"roscoe.sh/roscoe/internal/config"
 )
 
 // FindSession locates sessionID's transcript under configDir/projects/*/,
@@ -37,6 +39,30 @@ func FindSession(configDir, sessionID string) (string, error) {
 // on-disk log into one request, so a long conversation blows the context
 // window before compaction can run. Trimming keeps resume working.
 const maxResumeBytes = 400 << 10
+
+// Oversized reports whether a session transcript has grown past the point
+// where resuming it whole is a bad idea. Chat asks this after every turn: the
+// import trims once, but `claude -p --resume` appends every turn after that,
+// and one substantive turn was measured to grow a 400KB import to 689KB.
+func Oversized(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Size() > maxResumeBytes
+}
+
+// SessionConfigDir is where a task's transcripts live: the operator's own
+// ~/.claude on the own-auth path, or the task's isolated dir under a fleet
+// token. Callers that need to find a session after a turn must look in the
+// same place the worker wrote it.
+func SessionConfigDir(cfg *config.Config, taskID, token string) (string, error) {
+	if token == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("worker: resolve home: %w", err)
+		}
+		return filepath.Join(home, ".claude"), nil
+	}
+	return filepath.Join(config.ExpandPath(cfg.StateDir), "workers", taskID, "ccfg"), nil
+}
 
 // conversationRecord reports whether a transcript record is part of the
 // conversation rather than the surrounding bookkeeping (attachments, file

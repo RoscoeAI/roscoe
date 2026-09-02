@@ -345,6 +345,19 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		if res != nil && res.SessionID != "" {
 			session = res.SessionID
 		}
+		// The import trims once; `--resume` then appends every turn. Left
+		// alone the transcript grows until a turn cannot resume at all, and
+		// every turn before that pays to carry it. Re-trim between turns
+		// through the same path the first import used: set resumeFrom and
+		// the next worker.Run imports the session into a fresh, smaller id.
+		if session != "" {
+			if dir, derr := worker.SessionConfigDir(cfg, *taskID, token); derr == nil {
+				if path, ferr := worker.FindSession(dir, session); ferr == nil && worker.Oversized(path) {
+					resumeFrom = path
+					sc.Printf("%stranscript is large · trimming to recent messages before the next turn%s", ansiFaint, ansiReset)
+				}
+			}
+		}
 		switch {
 		case acted.Esc:
 			sc.Print(ansiDim + "stopped · say what you want instead" + ansiReset)

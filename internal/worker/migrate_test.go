@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"roscoe.sh/roscoe/internal/config"
 )
 
 // writeTranscript creates configDir/projects/<project>/<sessionID>.jsonl with
@@ -260,5 +262,81 @@ func TestNilNoticeIsSafe(t *testing.T) {
 	src, destCfg := oversizedTranscript(t)
 	if _, err := importSession(src, destCfg, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Chat re-trims a session from its own config dir between turns. The trimmed
+// copy must land beside the source under a new id, and the source must be left
+// alone, or a mid-conversation trim destroys the very history it is compacting.
+func TestReimportFromSameConfigDirTrimsIntoNewSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfgDir := t.TempDir()
+	projDir := filepath.Join(cfgDir, "projects", "-Users-tim-code-app")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const sessionID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	src := filepath.Join(projDir, sessionID+".jsonl")
+	var b strings.Builder
+	blob := strings.Repeat("x", 50_000)
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&b, `{"type":"user","sessionId":%q,"n":%d,"text":%q}`+"\n", sessionID, i, blob)
+	}
+	if err := os.WriteFile(src, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(src)
+	if !Oversized(src) {
+		t.Fatal("fixture is not oversized")
+	}
+
+	// dest config dir == the dir the source already lives in.
+	newID, err := importSession(src, cfgDir, sessionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newID == sessionID {
+		t.Fatal("re-import of an oversized session kept the old id")
+	}
+	after, err := os.Stat(src)
+	if err != nil || after.Size() != before.Size() {
+		t.Errorf("source transcript was modified (%v -> %v)", before.Size(), after.Size())
+	}
+	trimmed := filepath.Join(projDir, newID+".jsonl")
+	fi, err := os.Stat(trimmed)
+	if err != nil {
+		t.Fatalf("trimmed copy missing beside the source: %v", err)
+	}
+	if Oversized(trimmed) {
+		t.Errorf("trimmed copy is still oversized: %d bytes", fi.Size())
+	}
+	// And it is findable where chat will look next turn.
+	if p, err := FindSession(cfgDir, newID); err != nil || p != trimmed {
+		t.Errorf("FindSession(%q) = %q, %v", newID, p, err)
+	}
+}
+
+func TestOversizedAndSessionConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	small := filepath.Join(dir, "s.jsonl")
+	if err := os.WriteFile(small, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if Oversized(small) {
+		t.Error("a tiny file reported oversized")
+	}
+	if Oversized(filepath.Join(dir, "missing.jsonl")) {
+		t.Error("a missing file reported oversized")
+	}
+
+	cfg := config.Default()
+	cfg.StateDir = dir
+	own, err := SessionConfigDir(cfg, "task-1", "")
+	if err != nil || !strings.HasSuffix(own, ".claude") {
+		t.Errorf("own-auth dir = %q, %v; want ~/.claude", own, err)
+	}
+	fleet, err := SessionConfigDir(cfg, "task-1", "tok")
+	if err != nil || fleet != filepath.Join(dir, "workers", "task-1", "ccfg") {
+		t.Errorf("fleet dir = %q, %v", fleet, err)
 	}
 }
