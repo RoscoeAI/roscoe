@@ -18,11 +18,19 @@ func TestLeafCardForEffort(t *testing.T) {
 		"tiers.middle.effort = " + cfg.Tiers.Middle.Effort,
 		"options  low · medium · high · xhigh · max · ultracode",
 		"means    ultracode",
-		"set it   /config tiers.middle.effort <value>   or   /effort <value>",
+		"set it   /config tiers.middle.effort <value>",
 	} {
 		if !strings.Contains(lines, want) {
 			t.Errorf("card lacks %q:\n%s", want, lines)
 		}
+	}
+	if strings.Contains(lines, "   or   ") {
+		t.Errorf("a tier's knob must not advertise a one-word command:\n%s", lines)
+	}
+	// The fleet-wide knob keeps its shortcut, and the card says so.
+	auto := strings.Join(buildLeafCard(cfg, "autonomy.level", "/config", shortcutFor("autonomy.level")).lines(), "\n")
+	if !strings.Contains(auto, "   or   /autonomy <value>") {
+		t.Errorf("autonomy card lacks its shortcut:\n%s", auto)
 	}
 	// A free-form setting shows its format; one absent from the file shows
 	// what the fleet runs with, marked as the default.
@@ -31,7 +39,7 @@ func TestLeafCardForEffort(t *testing.T) {
 	if !strings.Contains(text, "options  a git remote") {
 		t.Errorf("free-form card = %+v", card)
 	}
-	if got := buildLeafCard(cfg, "tiers.middle.harness", "/config", "/harness").Value; got != "claude (default)" {
+	if got := buildLeafCard(cfg, "tiers.middle.harness", "/config", "").Value; got != "claude (default)" {
 		t.Errorf("harness absent from the file shows %q, want the implied default", got)
 	}
 	cfg.Reporting.GitRemote = ""

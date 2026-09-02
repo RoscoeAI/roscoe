@@ -221,55 +221,6 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case msg == "/cost":
 			sc.Printf("%s%.4f USD across %d turns%s", ansiDim, spent, turns, ansiReset)
 			continue
-		case strings.HasPrefix(msg, "/model"):
-			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/model"))
-			if arg == "" {
-				printLeaf(sc, cfg, "tiers.middle.model")
-				continue
-			}
-			cfg.Tiers.Middle.Model = arg
-			persist(sc, explicit, "tiers.middle.model", arg)
-			continue
-		case strings.HasPrefix(msg, "/effort"):
-			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/effort"))
-			if arg == "" {
-				printLeaf(sc, cfg, "tiers.middle.effort")
-				continue
-			}
-			if !contains(config.EffortLevels(), arg) {
-				sc.Printf("%susage: /effort %s%s", ansiDim, strings.Join(config.EffortLevels(), "|"), ansiReset)
-				continue
-			}
-			cfg.Tiers.Middle.Effort = arg
-			persist(sc, explicit, "tiers.middle.effort", arg)
-			continue
-		case strings.HasPrefix(msg, "/harness"):
-			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/harness"))
-			if arg == "" {
-				printLeaf(sc, cfg, "tiers.middle.harness")
-				continue
-			}
-			if arg != "claude" && arg != "codex" {
-				sc.Print(ansiDim + "usage: /harness claude|codex" + ansiReset)
-				continue
-			}
-			cfg.Tiers.Middle.Harness, harnessLabel = arg, arg
-			persist(sc, explicit, "tiers.middle.harness", arg)
-			continue
-		case strings.HasPrefix(msg, "/subagents"):
-			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/subagents"))
-			if arg == "" {
-				printLeaf(sc, cfg, "tiers.subagents.max_concurrent")
-				continue
-			}
-			n, convErr := strconv.Atoi(arg)
-			if convErr != nil || n < 1 || n > 64 {
-				sc.Print(ansiDim + "usage: /subagents 1-64" + ansiReset)
-				continue
-			}
-			cfg.Tiers.Subagents.MaxConcurrent = n
-			persist(sc, explicit, "tiers.subagents.max_concurrent", arg)
-			continue
 		case strings.HasPrefix(msg, "/config"):
 			parts := strings.Fields(strings.TrimPrefix(msg, "/config"))
 			if len(parts) == 0 {
@@ -524,18 +475,14 @@ func min3(a, b, c int) int {
 // slash command is being typed, and in /help. Each names what changes and,
 // where it matters, what it costs you.
 var commandHelp = map[string]string{
-	"/model":     "the model your workers run; the main lever on cost per turn",
-	"/effort":    "how hard workers think; ultracode plans a workflow per task, lower is faster and cheaper",
-	"/harness":   "which CLI the workers are: claude or codex",
-	"/subagents": "how many cheap subagents one worker may run at once",
-	"/autonomy":  "0 to 100: how much roscoe decides without asking you",
-	"/settings":  "every tier's model and effort on one screen; arrows change them",
-	"/new":       "start a fresh session; this one stays on disk",
-	"/session":   "this session's id, for resuming later",
-	"/cost":      "what this chat has spent so far",
-	"/exit":      "leave; the session keeps its id",
-	"/config":    "any setting by path; alone it lists them, a path shows options and cost, a value sets it",
-	"/help":      "this list",
+	"/settings": "every tier's model and effort on one screen, under its tier; arrows change them",
+	"/autonomy": "0 to 100: how much roscoe decides without asking you; fleet-wide, no tier",
+	"/new":      "start a fresh session; this one stays on disk",
+	"/session":  "this session's id, for resuming later",
+	"/cost":     "what this chat has spent so far",
+	"/exit":     "leave; the session keeps its id",
+	"/config":   "any setting by path; alone it lists them, a path shows options and cost, a value sets it",
+	"/help":     "this list",
 }
 
 // helpGroups is /help's shape: what you are trying to do, then the commands.
@@ -544,7 +491,7 @@ var helpGroups = []struct {
 	title string
 	cmds  []string
 }{
-	{"change what runs", []string{"/model", "/effort", "/harness", "/subagents", "/autonomy", "/settings"}},
+	{"change what runs", []string{"/settings", "/autonomy"}},
 	{"this conversation", []string{"/new", "/session", "/cost", "/exit"}},
 	{"anything, by path", []string{"/config", "/help"}},
 }
@@ -590,16 +537,8 @@ func newChatCompleter(cfg *config.Config) *completer {
 					return nil // past the path; typing the value
 				}
 				return matching(cfg.ChildPaths(parentPath(token)), token)
-			case "/harness":
-				return matching([]string{"claude", "codex"}, token)
-			case "/effort":
-				return matching(config.EffortLevels(), token)
-			case "/model":
-				return matching(modelChoices(cfg), token)
 			case "/autonomy":
 				return matching([]string{"0", "25", "50", "75", "90", "100"}, token)
-			case "/subagents":
-				return matching([]string{"1", "2", "4", "8", "12", "16", "24"}, token)
 			}
 			return nil
 		},
@@ -733,17 +672,18 @@ func shortModel(m string) string {
 
 // commandArgs is what each command takes, appended to its name in /help.
 var commandArgs = map[string]string{
-	"/autonomy":  " 0-100",
-	"/config":    " <path> [value]",
-	"/effort":    " <level>",
-	"/harness":   " claude|codex",
-	"/model":     " <name>",
-	"/subagents": " <n>",
+	"/autonomy": " 0-100",
+	"/config":   " <path> [value]",
 }
 
 // commands are the slash commands offered in chat, in the order they
 // complete.
-var commands = []string{"/autonomy", "/config", "/cost", "/effort", "/exit", "/harness", "/help", "/model", "/new", "/session", "/settings", "/subagents"}
+// commands is the whole chat surface. Model, effort, harness and swarm width
+// have no one-word command on purpose: each belongs to one tier, and a
+// command that silently picks the tier (/effort meant the workers) was the
+// thing people misread. /settings shows every tier's knobs under its tier;
+// /config names the tier in the path.
+var commands = []string{"/autonomy", "/config", "/cost", "/exit", "/help", "/new", "/session", "/settings"}
 
 func matching(candidates []string, prefix string) []string {
 	if prefix == "" {

@@ -95,13 +95,10 @@ func (c leafCard) lines() []string {
 }
 
 // shortcuts maps the one-word chat commands to the setting they change, so a
-// card can say both spellings and the two can never disagree.
+// card can say both spellings and the two can never disagree. Only fleet-wide
+// settings get one: a shortcut for a tier's knob hides which tier.
 var shortcuts = map[string]string{
-	"/model":     "tiers.middle.model",
-	"/effort":    "tiers.middle.effort",
-	"/harness":   "tiers.middle.harness",
-	"/subagents": "tiers.subagents.max_concurrent",
-	"/autonomy":  "autonomy.level",
+	"/autonomy": "autonomy.level",
 }
 
 // shortcutFor is the one-word command for a path, or "".

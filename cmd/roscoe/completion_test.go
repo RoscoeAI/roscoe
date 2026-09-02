@@ -48,8 +48,8 @@ func TestConfigCompletionNotes(t *testing.T) {
 		{"/config autonomy.lev", "autonomy.level: 0 asks you about everything; 100 interrupts you only when credits run out"}, // unambiguous partial
 		{"/config autonomy.level 90", "autonomy.level: 0 asks you about everything; 100 interrupts you only when credits run out"},
 		{"/config tiers.", "tiers: the three tiers of the fleet: your session, the workers that do the work, the swarm each worker fans out to"}, // mid-walk
-		{"/mod", "/model: the model your workers run; the main lever on cost per turn"},
-		{"/harness", "/harness: which CLI the workers are: claude or codex"},
+		{"/auto", "/autonomy: 0 to 100: how much roscoe decides without asking you; fleet-wide, no tier"},
+		{"/settings", "/settings: every tier's model and effort on one screen, under its tier; arrows change them"},
 		{"hello", ""},
 	}
 	for _, tc := range cases {
@@ -69,8 +69,8 @@ func TestCompleteOnDescendsIntoBranches(t *testing.T) {
 	if got := comp.completeOn("/config autonomy.lev"); got != "/config autonomy.level " {
 		t.Errorf("completing a leaf = %q, want %q", got, "/config autonomy.level ")
 	}
-	if got := comp.completeOn("/harn"); got != "/harness " {
-		t.Errorf("completing a command = %q, want %q", got, "/harness ")
+	if got := comp.completeOn("/auto"); got != "/autonomy " {
+		t.Errorf("completing a command = %q, want %q", got, "/autonomy ")
 	}
 }
 
@@ -98,14 +98,26 @@ func TestHintIsRelativeToLevel(t *testing.T) {
 	}
 }
 
-func TestEffortCompletion(t *testing.T) {
-	comp := newChatCompleter(config.Default())
-	got := comp.candidates("/effort ")
-	if strings.Join(got, " ") != strings.Join(config.EffortLevels(), " ") {
-		t.Errorf("/effort offered %v, want %v", got, config.EffortLevels())
+// Model, effort, harness and swarm width belong to one tier each, so they have
+// no one-word command: /effort silently meant the workers and was misread as
+// the session's. They are reached under their tier in /settings or by a path
+// that names the tier in /config.
+func TestNoTierBoundShortcuts(t *testing.T) {
+	for _, gone := range []string{"/effort", "/model", "/harness", "/subagents"} {
+		if contains(commands, gone) {
+			t.Errorf("%s is back; a tier's knob must not have a command that hides the tier", gone)
+		}
+		if nearestCommand(gone) == gone {
+			t.Errorf("nearestCommand still knows %s", gone)
+		}
 	}
-	if !contains(got, "ultracode") {
-		t.Error("ultracode must be offered; it is the default and claude --help omits it")
+	comp := newChatCompleter(config.Default())
+	if got := comp.candidates("/autonomy "); strings.Join(got, " ") != "0 25 50 75 90 100" {
+		t.Errorf("/autonomy offered %v", got)
+	}
+	// The tier-named path still completes to the levels' owner.
+	if got := comp.completeOn("/config tiers.middle.eff"); got != "/config tiers.middle.effort " {
+		t.Errorf("effort by path completes to %q", got)
 	}
 }
 
@@ -139,8 +151,7 @@ func TestNearestCommand(t *testing.T) {
 	cases := map[string]string{
 		"/setting":  "/settings", // the real one, hit in a live session
 		"/settigns": "/settings",
-		"/mode":     "/model",
-		"/effot":    "/effort",
+		"/autonmy":  "/autonomy",
 		"/conifg":   "/config",
 		"/halp":     "/help",
 		"/set":      "/settings", // prefix match
