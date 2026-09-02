@@ -516,8 +516,8 @@ func TestGet(t *testing.T) {
 	}{
 		{"project", "roscoe.sh"},
 		{"tiers.subagents.model", "zai-org/GLM-5.3-Flash"},
-		{"nodes.0.ssh", "roscoe-ts"},
-		{"nodes.2.enabled", false},
+		{"nodes.0.name", "local"},
+		{"nodes.0.enabled", true},
 		{"router.port", json.Number("8484")},
 		{"quorum.min_confidence", json.Number("0.7")},
 		{"providers.deepinfra.pricing_per_mtok.input", json.Number("0.075")},
@@ -573,7 +573,7 @@ func TestGetContainerValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	arr, ok := got.([]any)
-	if !ok || len(arr) != 3 {
+	if !ok || len(arr) != 1 {
 		t.Fatalf("Get(nodes) = %T len-check failed: %v", got, got)
 	}
 }
@@ -588,7 +588,7 @@ func TestGetErrors(t *testing.T) {
 		{"nope", `no such key "nope"`},
 		{"tiers.nope", `no such key "tiers.nope"`},
 		{"nodes.abc", `"nodes.abc": array index must be a number`},
-		{"nodes.3", `"nodes.3": index 3 out of range (len 3)`},
+		{"nodes.3", `"nodes.3": index 3 out of range (len 1)`},
 		{"nodes.-1", "out of range"},
 		{"project.sub", `"project.sub": value is not an object or array`},
 	}
@@ -656,19 +656,19 @@ func TestSetPathValidSets(t *testing.T) {
 			},
 		},
 		{
-			path: "nodes.1.workers", raw: "5", // array index into struct field
+			path: "nodes.0.workers", raw: "5", // array index into struct field
 			check: func(t *testing.T, c *Config) {
-				if c.Nodes[1].Workers != 5 {
-					t.Fatalf("nodes[1].workers = %d", c.Nodes[1].Workers)
+				if c.Nodes[0].Workers != 5 {
+					t.Fatalf("nodes[0].workers = %d", c.Nodes[0].Workers)
 				}
 			},
 		},
 		{
-			path: "nodes.2", raw: `{"name":"newnode","ssh":"nn-ts","workers":3,"enabled":true}`,
+			path: "nodes.0", raw: `{"name":"newnode","ssh":"nn-ts","workers":3,"enabled":true}`,
 			check: func(t *testing.T, c *Config) {
 				want := Node{Name: "newnode", SSH: "nn-ts", Workers: 3, Enabled: true}
-				if c.Nodes[2] != want {
-					t.Fatalf("nodes[2] = %+v", c.Nodes[2])
+				if c.Nodes[0] != want {
+					t.Fatalf("nodes[0] = %+v", c.Nodes[0])
 				}
 			},
 		},
@@ -767,7 +767,7 @@ func TestSetPathPathErrors(t *testing.T) {
 	}{
 		{"", "x", "empty path"},
 		{"nodes.abc", "x", "array index must be a number"},
-		{"nodes.9", "x", "index 9 out of range (len 3)"},
+		{"nodes.9", "x", "index 9 out of range (len 1)"},
 		{"nodes.9.ssh", "x", "out of range"}, // intermediate index checked too
 		{"project.sub", "x", "parent is not an object or array"},
 		{"tiers.nope.deeper", "x", `no such key "tiers.nope"`},
@@ -811,4 +811,20 @@ func errsContain(errs []error, substr string) bool {
 		}
 	}
 	return false
+}
+
+// A fresh config names no machine but this one. The defaults once carried the
+// author's two hosts, and every fleet command then reached for them.
+func TestDefaultNamesNoRemoteHosts(t *testing.T) {
+	c := Default()
+	for _, n := range c.Nodes {
+		if n.SSH != "" {
+			t.Errorf("default node %q has ssh %q; defaults must not name a remote machine", n.Name, n.SSH)
+		}
+	}
+	for name, p := range c.Providers {
+		if strings.Contains(p.BaseURL, "roscoe-") {
+			t.Errorf("provider %s points at %s, someone's own host", name, p.BaseURL)
+		}
+	}
 }

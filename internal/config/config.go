@@ -41,7 +41,7 @@ func Default() *Config {
 			},
 			"local": {
 				Protocol:    "anthropic",
-				BaseURL:     "http://roscoe-2tb:11434",
+				BaseURL:     "http://localhost:11434",
 				Auth:        "static:ollama",
 				CountTokens: "estimate",
 				Serve: map[string]any{
@@ -51,10 +51,13 @@ func Default() *Config {
 				},
 			},
 		},
+		// The fleet is this machine: the three tiers run here, and "multi-node"
+		// is the binary keeping many workers and their calls in flight at once.
+		// Other machines are opt-in, added by the operator; a default that named
+		// someone's own hosts sent the tooling at machines that were never in
+		// scope.
 		Nodes: []Node{
-			{Name: "roscoe", SSH: "roscoe-ts", Workers: 2, Enabled: true},
-			{Name: "roscoe-2tb", SSH: "roscoe-2tb-ts", Workers: 2, Enabled: true},
-			{Name: "laptop", SSH: "", Workers: 1, Enabled: false},
+			{Name: "local", SSH: "", Workers: 2, Enabled: true},
 		},
 		Tiers: Tiers{
 			Main: MainTier{
