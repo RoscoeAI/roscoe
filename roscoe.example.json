@@ -68,6 +68,7 @@
     "middle": {
       "provider": "anthropic",
       "harness": "claude",
+      "mcp_servers": {},
       "lean_context": true,
       "cache_ttl": "1h",
       "effort": "ultracode",

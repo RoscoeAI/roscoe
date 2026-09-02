@@ -676,3 +676,77 @@ func TestCodexNeverReceivesAClaudeName(t *testing.T) {
 		}
 	}
 }
+
+// A lean worker gets exactly the declared servers and nothing inherited; an
+// undeclared set stays the empty config that made workers cheap.
+func TestMCPServersReachTheWorker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newStubRun(t)
+	s.cfg.Tiers.Middle.MCPServers = map[string]map[string]any{
+		"ctx7": {"type": "stdio", "command": "npx", "args": []any{"-y", "@upstash/context7-mcp"}},
+	}
+	_, err := Run(context.Background(), Task{ID: "t", Prompt: "hi"}, s.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(s.outDir, "args"))
+	args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+	i := indexOf(args, "--mcp-config")
+	if i < 0 {
+		t.Fatalf("no --mcp-config in %q", args)
+	}
+	if !strings.Contains(args[i+1], `"ctx7"`) || !strings.Contains(args[i+1], "@upstash/context7-mcp") {
+		t.Errorf("declared server not passed through: %s", args[i+1])
+	}
+	if indexOf(args, "--strict-mcp-config") < 0 {
+		t.Error("lean worker must be strict so only the declared servers load")
+	}
+	j := indexOf(args, "--allowedTools")
+	if j < 0 || !strings.Contains(args[j+1], "mcp__ctx7") {
+		t.Errorf("allowedTools does not admit the server: %q", args[j+1])
+	}
+}
+
+func TestNoMCPServersStaysLeanAndEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newStubRun(t)
+	_, _ = Run(context.Background(), Task{ID: "t", Prompt: "hi"}, s.opts)
+	raw, _ := os.ReadFile(filepath.Join(s.outDir, "args"))
+	args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+	i := indexOf(args, "--mcp-config")
+	if i < 0 || args[i+1] != `{"mcpServers":{}}` {
+		t.Errorf("undeclared servers should give the empty config, got %q", args)
+	}
+	if j := indexOf(args, "--allowedTools"); j >= 0 && strings.Contains(args[j+1], "mcp__") {
+		t.Errorf("allowedTools gained an mcp entry with no servers: %q", args[j+1])
+	}
+}
+
+// A non-lean worker inherits its config; declared servers are added, not
+// substituted, so --strict must not appear.
+func TestMCPServersOnANonLeanWorkerAreAdditive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newStubRun(t)
+	off := false
+	s.cfg.Tiers.Middle.LeanContext = &off
+	s.cfg.Tiers.Middle.MCPServers = map[string]map[string]any{"neon": {"type": "http", "url": "https://mcp.neon.tech/mcp"}}
+	_, _ = Run(context.Background(), Task{ID: "t", Prompt: "hi"}, s.opts)
+	raw, _ := os.ReadFile(filepath.Join(s.outDir, "args"))
+	args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+	if indexOf(args, "--strict-mcp-config") >= 0 {
+		t.Error("non-lean worker was made strict; declared servers should add to the inherited set")
+	}
+	if i := indexOf(args, "--mcp-config"); i < 0 || !strings.Contains(args[i+1], "mcp.neon.tech") {
+		t.Errorf("declared server missing on the non-lean path: %q", args)
+	}
+}
+
+func TestMCPConfigJSONAndAllowList(t *testing.T) {
+	if got := MCPConfigJSON(nil); got != `{"mcpServers":{}}` {
+		t.Errorf("nil -> %s", got)
+	}
+	got := allowedWithMCP([]string{"Read"}, map[string]map[string]any{"b": {}, "a": {}})
+	if strings.Join(got, ",") != "Read,mcp__a,mcp__b" {
+		t.Errorf("allow list = %v; declared servers must be appended in a stable order", got)
+	}
+}

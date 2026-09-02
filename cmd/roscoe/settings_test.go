@@ -286,3 +286,27 @@ func TestMiddleModelRowUnderCodex(t *testing.T) {
 		}
 	}
 }
+
+// The mcp row is read-only (a map is beyond the arrow keys) but must exist and
+// must say how to change it, because declaring a server is a cost decision.
+func TestMCPRow(t *testing.T) {
+	cfg := config.Default()
+	var row settingRow
+	for _, r := range settingsRows(cfg) {
+		if r.label == "mcp" {
+			row = r
+		}
+	}
+	if row.label == "" {
+		t.Fatal("no mcp row")
+	}
+	if row.editable() || !strings.Contains(row.why, "none") || !strings.Contains(row.why, "mcp_servers") {
+		t.Errorf("mcp row = %+v", row)
+	}
+	cfg.Tiers.Middle.MCPServers = map[string]map[string]any{"z": {"url": "u"}, "a": {"command": "c"}}
+	for _, r := range settingsRows(cfg) {
+		if r.label == "mcp" && !strings.Contains(r.why, "2: a, z") {
+			t.Errorf("mcp row with servers = %q", r.why)
+		}
+	}
+}

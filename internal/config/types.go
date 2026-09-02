@@ -119,6 +119,14 @@ type MiddleTier struct {
 	// later pays for it; a single run that then goes idle does not. Iterations
 	// inside one loop are seconds apart and never exceed either TTL.
 	CacheTTL string `json:"cache_ttl,omitempty"`
+	// MCPServers are the MCP servers a worker gets, by name, each definition
+	// in Claude Code's own mcpServers shape and passed through verbatim
+	// ({"type":"stdio","command":...,"args":[...]} or {"type":"http","url":...}).
+	// Lean workers load only these; a non-lean worker gets them in addition
+	// to whatever it inherits. Empty means none, which is the cheap default:
+	// every server's tool definitions ride in the prompt prefix on every
+	// round trip, so declaring one is a cost decision made on purpose.
+	MCPServers map[string]map[string]any `json:"mcp_servers,omitempty"`
 	// LeanContext strips the operator's MCP servers, user-level settings,
 	// skills and agents from workers, and moves per-machine sections out of
 	// the system prompt. Workers keep the built-in tools and the project's

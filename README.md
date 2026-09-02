@@ -143,6 +143,11 @@ above the prompt describes whatever you are pointing at as you type.
 The reply streams as it is written rather than landing whole at the end of
 the turn, so a long answer is watched rather than waited for.
 
+Workers get exactly the MCP servers you declare in `tiers.middle.mcp_servers`,
+in Claude Code's own shape, and nothing else. Every server's tool definitions
+ride in the prompt prefix on every round trip, so the default is none and
+declaring one is a cost decision made on purpose.
+
 Finding a conversation again does not need its id. `roscoe sessions` lists what
 has run, newest first, with what each cost and the first thing you said;
 `roscoe chat --last` resumes the newest, and `roscoe chat --pick` offers a

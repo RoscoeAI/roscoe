@@ -8,12 +8,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -193,11 +195,17 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			"--include-partial-messages",
 			"--forward-subagent-text",
 			"--permission-mode", mid.PermissionMode,
-			"--allowedTools", strings.Join(mid.AllowedTools, ","),
+			"--allowedTools", strings.Join(allowedWithMCP(mid.AllowedTools, mid.MCPServers), ","),
 			"--agents", agentsJSON,
 			"--max-budget-usd", strconv.FormatFloat(mid.MaxBudgetUSDPerTask, 'f', -1, 64),
 			"--model", mid.Model,
 		}
+		// MCP: a worker gets exactly the servers roscoe.json declares. Lean
+		// makes that list the whole list (--strict); a non-lean worker gets
+		// them on top of what it inherits. Each server's tool definitions
+		// ride in the prefix on every round trip, so this is where that
+		// cost is chosen.
+		mcpJSON := MCPConfigJSON(mid.MCPServers)
 		if mid.Lean() {
 			// Every round trip a worker makes re-reads the whole prompt
 			// prefix, so what is IN that prefix is the dominant cost of a
@@ -208,10 +216,12 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			// CLAUDE_CONFIG_DIR is deliberately NOT redirected here: on the
 			// own-auth path that is where the operator's login lives.
 			args = append(args,
-				"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`,
+				"--strict-mcp-config", "--mcp-config", mcpJSON,
 				"--setting-sources", "project",
 				"--exclude-dynamic-system-prompt-sections",
 			)
+		} else if len(mid.MCPServers) > 0 {
+			args = append(args, "--mcp-config", mcpJSON)
 		}
 		if mid.Effort != "" {
 			args = append(args, "--effort", mid.Effort)
@@ -370,4 +380,35 @@ func uuidV4() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+// MCPConfigJSON renders the declared servers in the shape --mcp-config takes.
+// Definitions are passed through verbatim; roscoe does not track Claude Code's
+// MCP schema, it only decides which servers a worker gets. Nil renders as an
+// empty set, which under --strict-mcp-config means none.
+func MCPConfigJSON(servers map[string]map[string]any) string {
+	if servers == nil {
+		servers = map[string]map[string]any{}
+	}
+	b, err := json.Marshal(map[string]any{"mcpServers": servers})
+	if err != nil {
+		return `{"mcpServers":{}}`
+	}
+	return string(b)
+}
+
+// allowedWithMCP adds mcp__<server> for each declared server, so its tools are
+// permitted under the permission modes that consult the allow list. Under
+// bypassPermissions this is redundant and harmless.
+func allowedWithMCP(allowed []string, servers map[string]map[string]any) []string {
+	out := append([]string(nil), allowed...)
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		out = append(out, "mcp__"+n)
+	}
+	return out
 }

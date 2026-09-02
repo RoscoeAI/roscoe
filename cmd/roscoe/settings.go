@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"roscoe.sh/roscoe/internal/config"
@@ -75,6 +76,7 @@ func settingsRowsWith(cfg *config.Config, cat *models.Catalog) []settingRow {
 			raw:     boolStr(cfg.Tiers.Middle.Lean()),
 			display: leanDisplay(cfg.Tiers.Middle.Lean()),
 			choices: []string{"true", "false"}},
+		{label: "mcp", why: mcpSummary(cfg)},
 		{label: "cache", path: "tiers.middle.cache_ttl",
 			raw: cfg.Tiers.Middle.TTL(), display: cfg.Tiers.Middle.TTL() + " prompt cache",
 			choices: []string{"1h", "5m"}},
@@ -92,6 +94,21 @@ func settingsRowsWith(cfg *config.Config, cat *models.Catalog) []settingRow {
 		{label: "autonomy", path: "autonomy.level",
 			raw: fmt.Sprintf("%d", cfg.Autonomy.Level), choices: []string{"0", "25", "50", "75", "90", "100"}},
 	}
+}
+
+// mcpSummary names the servers a worker gets. Editing a map is beyond the
+// arrow keys, so the row reads rather than edits and points at /config.
+func mcpSummary(cfg *config.Config) string {
+	srv := cfg.Tiers.Middle.MCPServers
+	if len(srv) == 0 {
+		return "none   set tiers.middle.mcp_servers to give workers a server"
+	}
+	names := make([]string, 0, len(srv))
+	for n := range srv {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("%d: %s   (edit with /config tiers.middle.mcp_servers)", len(names), strings.Join(names, ", "))
 }
 
 func boolStr(b bool) string {

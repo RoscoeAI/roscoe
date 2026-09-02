@@ -1,11 +1,11 @@
 # Claude Code parity
 
-Where roscoe stands against the tool people already know, as of v0.27.0
+Where roscoe stands against the tool people already know, as of v0.28.0
 (2026-08-31). Parity is a means, not the goal: roscoe should feel familiar
 enough that nobody has to relearn the basics, then do things Claude Code
 does not.
 
-**Everyday loop: ~87%. Whole surface: ~51%.**
+**Everyday loop: ~90%. Whole surface: ~55%.**
 
 Roscoe starts with an unfair advantage: a worker *is* Claude Code
 (`claude -p`), so every tool, permission mode, hook, skill, and CLAUDE.md
@@ -22,6 +22,7 @@ conversation, the controls, the session handling.
 | Line editing | yes | **yes** | left/right, home/end, word jumps, delete, and the readline kill keys; the same editor serves the during-turn box |
 | Multi-line input | yes | **yes** | bracketed paste keeps a pasted block whole; alt-enter or a trailing backslash adds a line; the box grows to fit |
 | Session picker | yes | **yes** | `roscoe sessions` lists runs with cost and first prompt; `chat --last` and `chat --pick` resume without an id |
+| MCP servers | yes | **yes, chosen** | `tiers.middle.mcp_servers` declares exactly which servers a worker gets; lean keeps the rest out of the prefix |
 | Scrollback | yes | **yes** | arrows and page up/down move the viewport over the whole conversation |
 | Live output while working | yes | **yes** | tool calls as they happen, and the reply streams as it is written |
 | Interrupt mid-turn | Esc | **Esc** | stops at a clean point, then you redirect |
@@ -43,7 +44,6 @@ The gaps you feel within a minute of typing:
 | Permission prompts | **no** | workers run pre-approved; there is no "allow this once?" |
 | Images in a message | **no** | text only |
 | `@file` mentions and completion | **no** | say the path instead |
-| MCP servers | **no** | roscoe does not pass `--mcp-config` yet |
 | Plan mode, checkpoints, rewind | **no** | no equivalent |
 | Status line, themes | **no** | one look |
 
@@ -70,7 +70,9 @@ Deviation is the point in these:
 
 ## What to build next for parity that is felt
 
-1. **MCP passthrough**, so existing servers work in workers.
+The felt gaps are closed. What remains on the whole surface is deliberate
+distance rather than debt: permission prompts (the quorum is roscoe's answer),
+plan mode and checkpoints, images, `@file` mentions, and themes.
 
 Permission prompts are deliberately further down: a fleet running at
 autonomy 90 is meant to keep going, and the quorum plus SMS escalation is

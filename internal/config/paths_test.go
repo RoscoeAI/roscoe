@@ -149,3 +149,24 @@ func TestValidateCacheTTL(t *testing.T) {
 		t.Errorf("unset cache_ttl = %q, want claude's own default 1h", got)
 	}
 }
+
+// A declared MCP server without a way to start or reach it is a typo that
+// would otherwise surface as a worker failing to boot.
+func TestValidateMCPServers(t *testing.T) {
+	c := Default()
+	c.Tiers.Middle.MCPServers = map[string]map[string]any{
+		"ctx7": {"type": "stdio", "command": "npx", "args": []any{"-y", "@upstash/context7-mcp"}},
+		"neon": {"type": "http", "url": "https://mcp.neon.tech/mcp"},
+	}
+	if errs := c.Validate(); len(errs) > 0 {
+		t.Errorf("valid servers rejected: %v", errs)
+	}
+	c.Tiers.Middle.MCPServers["broken"] = map[string]any{"type": "stdio", "args": []any{"x"}}
+	errs := c.Validate()
+	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "broken") {
+		t.Errorf("a server with neither command nor url passed: %v", errs)
+	}
+	if Describe("tiers.middle.mcp_servers") == "" || Describe("tiers.middle.mcp_servers.ctx7") == "" {
+		t.Error("mcp_servers is undocumented")
+	}
+}

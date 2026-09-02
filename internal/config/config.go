@@ -253,6 +253,17 @@ func (c *Config) Validate() []error {
 	if t := c.Tiers.Middle.CacheTTL; t != "" && t != "1h" && t != "5m" {
 		errs = append(errs, fmt.Errorf("tiers.middle.cache_ttl %q is not 1h or 5m", t))
 	}
+	for name, srv := range c.Tiers.Middle.MCPServers {
+		if strings.TrimSpace(name) == "" {
+			errs = append(errs, errors.New("tiers.middle.mcp_servers: a server needs a name"))
+			continue
+		}
+		_, hasCmd := srv["command"]
+		_, hasURL := srv["url"]
+		if !hasCmd && !hasURL {
+			errs = append(errs, fmt.Errorf("tiers.middle.mcp_servers.%s needs a command (stdio) or a url (http)", name))
+		}
+	}
 	if e := c.Tiers.Middle.Effort; e != "" && !validEffort[e] {
 		// claude only warns and falls back to its default, which silently
 		// costs you the reasoning you asked for; fail here instead.
@@ -517,6 +528,8 @@ var docs = map[string]string{
 	"tiers.middle":                              "the headless workers that do the work",
 	"tiers.middle.harness":                      "claude or codex",
 	"tiers.middle.cache_ttl":                    "how long the prompt prefix stays cached: 1h or 5m",
+	"tiers.middle.mcp_servers":                  "MCP servers workers get, by name; each in Claude Code's mcpServers shape",
+	"tiers.middle.mcp_servers.*":                "one server: {type, command, args} for stdio or {type, url} for http",
 	"tiers.middle.lean_context":                 "strip your MCP servers and personal skills from workers; a much cheaper prompt prefix",
 	"tiers.middle.effort":                       "reasoning effort; ultracode adds a planned workflow per task",
 	"tiers.middle.orchestrate":                  "fan out with workflows below ultracode effort; ultracode does it already",
