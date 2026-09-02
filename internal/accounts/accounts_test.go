@@ -92,7 +92,9 @@ func TestResolveLockedKeychainAndEnvFallback(t *testing.T) {
 	if name != "api-fallback" || tok != "sk-ant-api-test" {
 		t.Fatalf("resolved %q", name)
 	}
-	if len(tried) != 1 || !strings.Contains(tried[0].Why, "locked") || !strings.Contains(tried[0].Why, "env:") {
+	// ErrLocked's text differs per platform (CI is Linux); the reason must
+	// carry it whole, and every variant points at env: refs.
+	if len(tried) != 1 || !strings.Contains(tried[0].Why, ErrLocked.Error()) || !strings.Contains(tried[0].Why, "env:") {
 		t.Errorf("locked keychain reason = %+v", tried)
 	}
 	// Process env is the fallback behind the env file.
@@ -144,8 +146,8 @@ func TestStatusNeverReadsTokens(t *testing.T) {
 	}
 	// A locked keychain is reported as such, per row, not as a crash.
 	rows = Status(cfg, nil, nil, &fakeKC{locked: true}, now)
-	if !strings.Contains(rows[0].Present, "locked") {
-		t.Errorf("locked present = %q", rows[0].Present)
+	if rows[0].Present != ErrLocked.Error() {
+		t.Errorf("locked present = %q, want %q", rows[0].Present, ErrLocked.Error())
 	}
 }
 

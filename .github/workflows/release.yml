@@ -15,6 +15,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      # A red suite must not ship. Release used to run independently of CI,
+      # and v0.33.0 went out while CI was failing on Linux-only test text.
+      - name: Test
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
       - name: Build all platforms
         run: |
           set -eu
