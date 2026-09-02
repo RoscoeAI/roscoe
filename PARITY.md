@@ -63,6 +63,14 @@ Deviation is the point in these:
   `run --node` runs a task on one of them with the stream and your keys
   passing through ssh; `dispatch` picks the node with the most free worker
   slots for you.
+- **A machine that measures itself first.** `roscoe calibrate` reads cores,
+  memory, harness versions, worker start time and the account's usage
+  window, optionally runs a warm worker and a burst, and recommends the
+  fleet's limits with a reason for each; `top` flags a stale calibration.
+- **Many workers at once, inside one binary.** `roscoe run "a" "b" "c"`
+  runs through a pool: the first task warms the prompt cache, the rest
+  follow up to the calibrated limit, spread across every account under its
+  own ceiling, one ledger each.
 - **Memory that compounds.** A Graphify knowledge graph under `~/.roscoe`.
   Planned.
 - **Either harness.** Claude Code or Codex workers behind one interface.
