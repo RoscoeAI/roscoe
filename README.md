@@ -211,6 +211,19 @@ Replies arrive over an outbound WebSocket and queue server-side while your
 laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 `roscoe relay listen`.
 
+## Accounts
+
+Workers run under the first account in `tiers.middle.accounts` whose token
+is present. A token lives in the macOS keychain (`keychain:<service>`) or an
+env var (`env:<VAR>`, from the env file). `roscoe accounts` shows every
+account, whether its token is there (checked without reading it), how old a
+minted token is, and which tier uses it. `roscoe accounts set <name>` stores
+a token: the keychain tool prompts for it with echo off, so roscoe never sees
+the value. Mint one with `claude setup-token`; they expire at twelve months
+and the table says so from eleven. Every run prints which account it used,
+or every reason none did. A Mac reached over ssh has a locked keychain, so
+nodes use `env:` refs and `roscoe deploy --env`.
+
 ## More machines
 
 Every machine under `nodes[]` in roscoe.json is reached over your own ssh
@@ -261,7 +274,7 @@ screen names the model codex will actually run instead. Multi-node:
 `node`/`status` (what is on each machine), `deploy` and `up` (put roscoe
 there, pinned to your version), `run --node` (one task on one machine) and
 `dispatch` (one task on the freest machine) work today; what is still in
-flight is
+flight is `roscoe top`,
 as are the account vault (`accounts`), MCP dispatch into your interactive
 session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).

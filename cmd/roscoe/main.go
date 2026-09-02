@@ -91,7 +91,9 @@ func realMain() int {
 		return cmdNode(ctx, *cfgPath, rest)
 	case "up":
 		return cmdUp(ctx, *cfgPath, rest)
-	case "accounts", "top":
+	case "accounts":
+		return cmdAccounts(ctx, *cfgPath, rest)
+	case "top":
 		return cmdStub(cmd)
 	default:
 		fmt.Fprintf(os.Stderr, "roscoe: unknown command %q\n\n", cmd)
@@ -133,7 +135,8 @@ commands:
                                           run one task on the node with the most free worker slots
   status                                  the node table (same as node)
   up [deploy flags]                       deploy to every enabled node, then show what is left to do
-  accounts | top                          coming (see ARCHITECTURE.md)
+  accounts [set <name>]                   which Claude credentials the fleet has, and storing one
+  top                                     coming (see ARCHITECTURE.md)
 
 --config defaults to ./roscoe.json, falling back to ~/.roscoe/roscoe.json.
 `)

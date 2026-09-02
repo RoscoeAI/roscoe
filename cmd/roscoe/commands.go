@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"roscoe.sh/roscoe/internal/accounts"
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/fleet"
 	"roscoe.sh/roscoe/internal/ledger"
@@ -336,11 +337,6 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	fmt.Fprintf(os.Stderr, "[router] listening on %s\n", addr)
 
 	account, token := resolveMiddleAccount(cfg, env)
-	if account == "" {
-		fmt.Fprintln(os.Stderr, "[account] no enabled middle-tier account with a resolvable env: token; relying on claude's own auth")
-	} else {
-		fmt.Fprintf(os.Stderr, "[account] %s\n", account)
-	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 
 	// Esc interrupts the running task at a clean point; typing a line then
@@ -459,27 +455,9 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 // process env as fallback). Slice 1 has no keychain access, so keychain:
 // refs are skipped; no match means "" — claude's own auth takes over.
 func resolveMiddleAccount(cfg *config.Config, env map[string]string) (name, token string) {
-	for _, want := range cfg.Tiers.Middle.Accounts {
-		for _, a := range cfg.Accounts {
-			if a.Name != want {
-				continue
-			}
-			if a.Enabled != nil && !*a.Enabled {
-				continue
-			}
-			v, ok := strings.CutPrefix(a.TokenRef, "env:")
-			if !ok {
-				continue
-			}
-			if t := env[v]; t != "" {
-				return a.Name, t
-			}
-			if t := os.Getenv(v); t != "" {
-				return a.Name, t
-			}
-		}
-	}
-	return "", ""
+	name, token, tried := accounts.Resolve(cfg, cfg.Tiers.Middle.Accounts, env, os.Getenv, accounts.MacKeychain{})
+	fmt.Fprintln(os.Stderr, accounts.Describe(name, tried))
+	return name, token
 }
 
 func shortID(s string) string {
