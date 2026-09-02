@@ -36,6 +36,7 @@ type screen struct {
 	input  string
 	hint   string // completion hint shown after the input
 	note   string // one-line help for what is being typed, shown above the box
+	cursor int    // insertion point within input, in runes
 	active bool
 
 	lines  []string // display lines, pre-wrapped to the terminal width
@@ -154,10 +155,16 @@ func (s *screen) Scroll(delta int) {
 // above it. A note appearing or disappearing changes the viewport height, so
 // that case repaints everything rather than just the box.
 func (s *screen) SetPrompt(prompt, input, hint, note string) {
+	s.SetPromptCursor(prompt, input, len([]rune(input)), hint, note)
+}
+
+// SetPromptCursor is SetPrompt with the cursor somewhere other than the end.
+func (s *screen) SetPromptCursor(prompt, input string, cursor int, hint, note string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	resized := (s.note == "") != (note == "")
 	s.prompt, s.input, s.hint, s.note = prompt, input, hint, note
+	s.cursor = cursor
 	if resized {
 		s.repaintLocked()
 		return
@@ -234,16 +241,35 @@ func (s *screen) drawBoxLocked() {
 		label = fmt.Sprintf("%d↑ %s", s.offset, s.prompt)
 	}
 
-	typed := label + s.input
-	if len([]rune(typed)) > inner-2 {
-		r := []rune(typed)
-		typed = string(r[len(r)-(inner-2):])
+	// Window the input around the cursor when it is wider than the box, so
+	// editing the middle of a long line shows the part being edited rather
+	// than always the tail.
+	in := []rune(s.input)
+	cur := s.cursor
+	if cur < 0 {
+		cur = 0
 	}
-	rest := inner - 1 - len([]rune(typed))
+	if cur > len(in) {
+		cur = len(in)
+	}
+	avail := inner - 2 - len([]rune(label))
+	if avail < 1 {
+		avail = 1
+	}
+	ws := inputWindow(len(in), cur, avail)
+	we := ws + avail
+	if we > len(in) {
+		we = len(in)
+	}
+	shown := string(in[ws:we])
+	rest := inner - 1 - len([]rune(label)) - (we - ws)
 	if rest < 0 {
 		rest = 0
 	}
 	hint := s.hint
+	if ws > 0 || we < len(in) { // a scrolled line has no room for ghost text
+		hint = ""
+	}
 	if len([]rune(hint)) > rest {
 		hint = string([]rune(hint)[:rest])
 	}
@@ -261,12 +287,12 @@ func (s *screen) drawBoxLocked() {
 		ansiHide, s.rows-2, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
 	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s│%s %s%s%s%s%s%s%s│%s",
 		s.rows-1, ansiClrEOL, ansiFaint, ansiReset,
-		ansiGreen+label+ansiReset, s.input,
+		ansiGreen+label+ansiReset, shown,
 		ansiFaint, hint, ansiReset, strings.Repeat(" ", pad), ansiFaint, ansiReset)
 	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s╰%s╯%s",
 		s.rows, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
-	// Park the cursor right after what has been typed.
-	fmt.Fprintf(os.Stdout, "\x1b[%d;%dH%s", s.rows-1, 3+len([]rune(label+s.input)), ansiShow)
+	// Put the terminal cursor where the insertion point is.
+	fmt.Fprintf(os.Stdout, "\x1b[%d;%dH%s", s.rows-1, 3+len([]rune(label))+(cur-ws), ansiShow)
 }
 
 // Resize re-measures and repaints; wrapped lines keep their old width, which
@@ -327,4 +353,22 @@ func wrapVisible(line string, width int) []string {
 	}
 	flush()
 	return out
+}
+
+// inputWindow picks the first visible rune of a line n runes long so that the
+// cursor at cur fits within avail columns. A line that fits starts at 0; a
+// longer one scrolls so the cursor is visible, preferring to keep the window
+// as far left as the cursor allows.
+func inputWindow(n, cur, avail int) int {
+	if avail <= 0 || n <= avail {
+		return 0
+	}
+	ws := cur - avail + 1
+	if ws < 0 {
+		ws = 0
+	}
+	if ws > n-avail {
+		ws = n - avail
+	}
+	return ws
 }

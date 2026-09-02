@@ -20,7 +20,7 @@ import (
 // without sending anything.
 type turnInput struct {
 	mu      sync.Mutex
-	buf     []byte
+	ed      lineEditor
 	queued  []string
 	steer   string
 	stopped bool
@@ -85,8 +85,8 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 				t.mu.Unlock()
 				return
 			case "esc":
-				if len(t.buf) > 0 { // esc clears a draft before it stops the turn
-					t.buf = nil
+				if !t.ed.Empty() { // esc clears a draft before it stops the turn
+					t.ed.Clear()
 					t.mu.Unlock()
 					t.redraw(sc)
 					continue
@@ -97,8 +97,8 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 				cancel()
 				return
 			case "enter":
-				line := strings.TrimSpace(string(t.buf))
-				t.buf = nil
+				line := strings.TrimSpace(t.ed.String())
+				t.ed.Clear()
 				if line != "" {
 					t.queued = append(t.queued, line)
 				}
@@ -109,12 +109,13 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 				t.redraw(sc)
 				continue
 			case "tab":
-				line := strings.TrimSpace(string(t.buf))
+				line := strings.TrimSpace(t.ed.String())
 				if line == "" {
 					t.mu.Unlock()
 					continue
 				}
-				t.steer, t.buf = line, nil
+				t.steer = line
+				t.ed.Clear()
 				t.mu.Unlock()
 				sc.Printf("%ssteering · stopping at a clean point to say it%s", ansiFaint, ansiReset)
 				cancel()
@@ -124,12 +125,9 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 				scrollBy(sc, key)
 				continue
 			default:
-				if len(key) == 1 && key[0] >= 0x20 && key[0] < 0x7f {
-					t.buf = append(t.buf, key[0])
-				} else if key == "\x7f" || key == "\b" {
-					if len(t.buf) > 0 {
-						t.buf = t.buf[:len(t.buf)-1]
-					}
+				if !t.ed.applyEditKey(key) {
+					t.mu.Unlock()
+					continue
 				}
 				t.mu.Unlock()
 				t.redraw(sc)
@@ -163,7 +161,7 @@ func scrollBy(sc *screen, key string) {
 // waiting to be sent.
 func (t *turnInput) redraw(sc *screen) {
 	t.mu.Lock()
-	buf := string(t.buf)
+	buf, cur := t.ed.String(), t.ed.Cursor()
 	n := len(t.queued)
 	t.mu.Unlock()
 
@@ -178,7 +176,7 @@ func (t *turnInput) redraw(sc *screen) {
 	} else if n > 1 {
 		note = fmt.Sprintf("%d messages queued for when this turn ends", n)
 	}
-	sc.SetPrompt(label, buf, hint, note)
+	sc.SetPromptCursor(label, buf, cur, hint, note)
 }
 
 // elapsed renders a duration compactly: 42s, 3m10s, 1h16m.

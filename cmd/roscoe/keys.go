@@ -105,49 +105,47 @@ func (k *keyReader) ReadLine(promptStr string) (string, bool) {
 // (ok=false). history is the previous inputs, oldest first, walked with
 // up/down once the line is empty.
 func (k *keyReader) ReadLineOn(sc *screen, promptStr, initial string, history []string, comp *completer) (string, bool) {
-	b := []byte(initial)
+	var ed lineEditor
+	ed.Set(initial)
 	hist := len(history) // index into history; len == "current, unsaved line"
 	redraw := func() {
-		sc.SetPrompt(promptStr, string(b), comp.hintFor(string(b)), comp.noteFor(string(b)))
+		line := ed.String()
+		sc.SetPromptCursor(promptStr, line, ed.Cursor(), comp.hintFor(line), comp.noteFor(line))
 	}
 	redraw()
 
 	for c := range k.events {
 		switch {
 		case c == '\r' || c == '\n':
-			line := string(b)
+			line := ed.String()
 			sc.SetPrompt(promptStr, "", "", "")
 			return line, true
 
-		case c == 0x7f || c == 0x08:
-			if len(b) > 0 {
-				b = b[:len(b)-1]
-			}
-
 		case c == '\t':
-			if done := comp.completeOn(string(b)); done != "" {
-				b = []byte(done)
+			if done := comp.completeOn(ed.String()); done != "" {
+				ed.Set(done)
 			}
 
 		case c == 0x1b:
-			switch k.escapeKey() {
+			key := k.escapeKey()
+			switch key {
 			case "esc":
 				return "", false
 			case "up":
-				if len(b) == 0 && hist > 0 { // recall a previous prompt
+				if ed.Empty() && hist > 0 { // recall a previous prompt
 					hist--
-					b = []byte(history[hist])
+					ed.Set(history[hist])
 				} else {
 					sc.Scroll(-1)
 				}
 			case "down":
-				if len(b) == 0 || hist < len(history) {
+				if ed.Empty() || hist < len(history) {
 					if hist < len(history)-1 {
 						hist++
-						b = []byte(history[hist])
+						ed.Set(history[hist])
 					} else if hist == len(history)-1 {
 						hist++
-						b = nil
+						ed.Clear()
 					} else {
 						sc.Scroll(1)
 					}
@@ -159,17 +157,18 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr, initial string, history []
 			case "pgdn":
 				sc.Scroll(10)
 			default:
-				continue
+				if !ed.applyEditKey(key) {
+					continue
+				}
 			}
 
 		case c == 0x03:
 			return "", false
 
-		case c >= 0x20 && c < 0x7f:
-			b = append(b, c)
-
 		default:
-			continue
+			if !ed.applyEditKey(string(rune(c))) {
+				continue
+			}
 		}
 		redraw()
 	}
@@ -334,6 +333,14 @@ func (k *keyReader) escapeKey() string {
 	case <-time.After(50 * time.Millisecond):
 		return "esc"
 	}
+	switch intro {
+	case 'b':
+		return "word-left" // alt-b
+	case 'f':
+		return "word-right" // alt-f
+	case 0x7f, 0x08:
+		return "kill-word" // alt-backspace
+	}
 	if intro != '[' && intro != 'O' {
 		return ""
 	}
@@ -345,17 +352,35 @@ func (k *keyReader) escapeKey() string {
 				return ""
 			}
 			if f >= 0x40 && f <= 0x7e { // final byte of the sequence
+				// A ";5" or ";3" parameter is ctrl or alt held down.
+				mod := strings.Contains(string(seq), ";5") || strings.Contains(string(seq), ";3")
 				switch f {
 				case 'A':
 					return "up"
 				case 'B':
 					return "down"
 				case 'C':
+					if mod {
+						return "word-right"
+					}
 					return "right"
 				case 'D':
+					if mod {
+						return "word-left"
+					}
 					return "left"
+				case 'H':
+					return "home"
+				case 'F':
+					return "end"
 				case '~':
 					switch string(seq) {
+					case "1", "7":
+						return "home"
+					case "4", "8":
+						return "end"
+					case "3":
+						return "delete"
 					case "5":
 						return "pgup"
 					case "6":
