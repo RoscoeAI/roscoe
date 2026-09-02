@@ -115,16 +115,31 @@ func TestCaptureRefusesAndRecordsFirst(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401 so the harness stops rather than retries", resp.StatusCode)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400: a 401 is retried until the timeout, a 400 exits in under 2s", resp.StatusCode)
 		}
 		resp.Body.Close()
 	}
 	if cap.model() != "claude-opus-5" {
 		t.Errorf("recorded %q, want the first", cap.model())
 	}
-	cap.reset()
-	if cap.model() != "" {
-		t.Error("reset did not clear")
+}
+
+// Aliases probe at once: five that each take 200ms must finish in well under
+// a second, not the second-per-alias a serial loop would take.
+func TestResolveViaHarnessProbesInParallel(t *testing.T) {
+	slow := fakeHarness(map[string]string{"a": "c-a", "b": "c-b", "c": "c-c", "d": "c-d"})
+	run := func(ctx context.Context, bin, base, alias string) error {
+		time.Sleep(200 * time.Millisecond)
+		return slow(ctx, bin, base, alias)
+	}
+	c := Open(t.TempDir())
+	start := time.Now()
+	got, err := c.resolveViaHarness(context.Background(), "anthropic", "claude", []string{"a", "b", "c", "d"}, run)
+	if err != nil || len(got) != 4 || got["d"] != "c-d" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if el := time.Since(start); el > 600*time.Millisecond {
+		t.Errorf("four 200ms probes took %s; they are running one after another", el)
 	}
 }

@@ -208,15 +208,24 @@ func runOnNode(ctx context.Context, cfg *config.Config, name, prompt string, o f
 		fmt.Fprintln(os.Stderr, notReady(p))
 		return 1
 	}
-	return execOnNode(ctx, p, prompt, o)
+	return execOnNode(ctx, cfg, p, prompt, o)
 }
 
 // execOnNode runs the task on an already-probed node.
-func execOnNode(ctx context.Context, p fleet.Probe, prompt string, o fleet.RemoteOpts) int {
+func execOnNode(ctx context.Context, cfg *config.Config, p fleet.Probe, prompt string, o fleet.RemoteOpts) int {
 	n := p.Node
 	fmt.Fprintf(os.Stderr, "[node] %s (%s) · claude %s · roscoe %s · %s free · task %s · dir %s\n",
 		n.Name, n.SSH, shortVersion(p.Claude), shortVersion(p.Roscoe), freeCell(p), o.TaskID, o.DisplayDir())
-	return fleet.Exec(ctx, n, fleet.RemoteRun(prompt, o), isTTY(os.Stdin) && isTTY(os.Stdout))
+	code := fleet.Exec(ctx, n, fleet.RemoteRun(prompt, o), isTTY(os.Stdin) && isTTY(os.Stdout))
+	// The run's ledger is on the node; bring it here so roscoe sessions and
+	// the memory graph see fleet work like local work. Best effort: the task
+	// already ran, and a failed copy must not turn its exit code into ours.
+	if got, err := fleet.BringHome(ctx, n, []string{o.TaskID}, runsDir(cfg), fleet.SCPFrom); err != nil {
+		fmt.Fprintf(os.Stderr, "[home] %v (roscoe sessions --node %s retries)\n", err, n.Name)
+	} else if len(got) == 1 {
+		fmt.Fprintf(os.Stderr, "[home] ledger for %s is here; roscoe sessions shows it\n", o.TaskID)
+	}
+	return code
 }
 
 // cmdDispatch runs one task on whichever enabled node has the most free
@@ -251,7 +260,7 @@ func cmdDispatch(ctx context.Context, explicit string, args []string) int {
 	if *taskID == "" {
 		*taskID = newTaskID()
 	}
-	return execOnNode(ctx, p, prompt, fleet.RemoteOpts{TaskID: *taskID, Dir: *dir, Harness: *harness})
+	return execOnNode(ctx, cfg, p, prompt, fleet.RemoteOpts{TaskID: *taskID, Dir: *dir, Harness: *harness})
 }
 
 // noNodeFree explains a refused dispatch: the table, so every node's reason

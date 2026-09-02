@@ -31,6 +31,9 @@ type Session struct {
 	About string
 	// Bytes is the transcript's size on disk, when found.
 	Bytes int64
+	// Node is the fleet node the run happened on, when its ledger was brought
+	// home from one; "" for runs made here.
+	Node string
 }
 
 // Resumable reports whether --resume has something to resume.
@@ -104,13 +107,16 @@ func readLedger(path string) (Session, bool) {
 			TS    string          `json:"ts"`
 			Task  string          `json:"task"`
 			Kind  string          `json:"kind"`
+			Node  string          `json:"node"`
 			Event json.RawMessage `json:"event"`
 		}
 		if json.Unmarshal(sc.Bytes(), &rec) != nil {
 			continue
 		}
 		any = true
-		if t, err := time.Parse(time.RFC3339Nano, rec.TS); err == nil {
+		// The home tag is written when the ledger is fetched, which may be
+		// long after the run, so it does not count toward when the run was.
+		if t, err := time.Parse(time.RFC3339Nano, rec.TS); err == nil && rec.Kind != "fleet.home" {
 			if s.Started.IsZero() || t.Before(s.Started) {
 				s.Started = t
 			}
@@ -124,6 +130,9 @@ func readLedger(path string) (Session, bool) {
 		if rec.Kind != "" {
 			if strings.HasPrefix(rec.Kind, "loop.") && s.Kind == "" {
 				s.Kind = "loop"
+			}
+			if rec.Kind == "fleet.home" {
+				s.Node = rec.Node
 			}
 			continue
 		}

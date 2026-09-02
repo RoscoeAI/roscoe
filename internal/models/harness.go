@@ -48,25 +48,44 @@ func (c *Catalog) resolveViaHarness(ctx context.Context, provider, claudeBin str
 		return nil, nil
 	}
 
-	cap := newCapture()
-	defer cap.Close()
+	// One capture per alias, all probes at once. Each probe is a claude
+	// process that does nothing but compose one request, so a handful in
+	// parallel costs no more than one; the bound keeps a long alias list from
+	// forking a process storm.
+	type result struct {
+		alias, model string
+		err          error
+	}
+	results := make([]result, len(todo))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, probeParallelism)
+	for i, alias := range todo {
+		wg.Add(1)
+		go func(i int, alias string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			cap := newCapture()
+			defer cap.Close()
+			pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+			err := run(pctx, claudeBin, cap.URL(), alias)
+			cancel()
+			results[i] = result{alias: alias, model: cap.model(), err: err}
+		}(i, alias)
+	}
+	wg.Wait()
 
 	out := map[string]string{}
 	var firstErr error
-	for _, alias := range todo {
-		cap.reset()
-		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
-		err := run(pctx, claudeBin, cap.URL(), alias)
-		cancel()
-		got := cap.model()
-		if got == "" {
-			if err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("%s: %w", alias, err)
+	for _, r := range results { // in alias order, so Learn and errors are deterministic
+		if r.model == "" {
+			if r.err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", r.alias, r.err)
 			}
 			continue
 		}
-		out[alias] = got
-		c.Learn(provider, alias, got)
+		out[r.alias] = r.model
+		c.Learn(provider, r.alias, r.model)
 	}
 	if len(out) == 0 && firstErr != nil {
 		return nil, firstErr
@@ -74,8 +93,11 @@ func (c *Catalog) resolveViaHarness(ctx context.Context, provider, claudeBin str
 	return out, nil
 }
 
-// probeTimeout bounds one alias. The harness normally gives up within a
-// second or two of the refused request; anything longer is a stuck process.
+// probeParallelism bounds concurrent claude probes.
+const probeParallelism = 4
+
+// probeTimeout bounds one alias. Refused with a 400 the harness exits in
+// under two seconds; anything longer is a stuck process.
 const probeTimeout = 20 * time.Second
 
 // runClaudeProbe is the real launcher. The lean flags keep startup fast and
@@ -126,23 +148,19 @@ func (c *capture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c.mu.Unlock()
 		}
 	}
-	// Refuse in the API's own error shape so the harness stops cleanly rather
-	// than retrying.
+	// Refuse in the API's own error shape, as a 400. Measured on claude
+	// 2.1.251: a 401 is retried six times and the process is still running at
+	// 25s, so every alias cost the whole probe timeout; a 400
+	// invalid_request_error gets one request and an exit in 1.6s.
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = io.WriteString(w, `{"type":"error","error":{"type":"authentication_error","message":"roscoe model probe"}}`)
+	w.WriteHeader(http.StatusBadRequest)
+	_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"roscoe model probe"}}`)
 }
 
 func (c *capture) model() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.got
-}
-
-func (c *capture) reset() {
-	c.mu.Lock()
-	c.got = ""
-	c.mu.Unlock()
 }
 
 func (c *capture) Close() {

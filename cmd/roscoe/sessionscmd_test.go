@@ -60,3 +60,21 @@ func TestAboutFromPrompt(t *testing.T) {
 		t.Errorf("a plain prompt should pass through, got %q", got)
 	}
 }
+
+// A fleet run says which node it ran on, first, because everything else on
+// the row (resume, transcript) means something different for it.
+func TestSessionsTableNamesTheNode(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	rows := []sessions.Session{
+		{TaskID: "t1", ID: "bf4cbb82", Node: "roscoe", Dir: "/x/.roscoe/work/t1", Ended: now.Add(-time.Hour)},
+		{TaskID: "t2", ID: "aaaabbbb", About: "fix the tests", Ended: now.Add(-time.Hour)},
+	}
+	out := sessionsTable(rows, now)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if !strings.Contains(lines[1], "on roscoe") || !strings.Contains(lines[1], ".roscoe/work/t1") {
+		t.Errorf("fleet row = %q", lines[1])
+	}
+	if strings.Contains(lines[2], "on ") {
+		t.Errorf("local row claims a node: %q", lines[2])
+	}
+}

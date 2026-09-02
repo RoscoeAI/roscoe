@@ -147,3 +147,35 @@ func TestAge(t *testing.T) {
 		}
 	}
 }
+
+// A ledger brought home from a node carries a fleet.home tag at the end. The
+// session names the node, and the tag's time (when it was fetched, maybe days
+// later) does not count as when the run was.
+func TestReadLedgerHomeTag(t *testing.T) {
+	dir := t.TempDir()
+	run := filepath.Join(dir, "task-remote")
+	if err := os.MkdirAll(run, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ledger := `{"ts":"2026-09-02T03:54:26Z","node":"local","task":"task-remote","seq":1,"event":{"type":"system","subtype":"init","session_id":"bf4c","model":"claude-sonnet-5","cwd":"/Users/t/.roscoe/work/task-remote"}}
+{"ts":"2026-09-02T03:54:29Z","node":"local","task":"task-remote","seq":2,"event":{"type":"result","is_error":true,"num_turns":1,"total_cost_usd":0,"session_id":"bf4c"}}
+{"ts":"2026-09-05T10:00:00Z","kind":"fleet.home","node":"roscoe","ssh":"roscoe-ts"}
+`
+	if err := os.WriteFile(filepath.Join(run, "events.jsonl"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(dir, 0, nil)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	s := list[0]
+	if s.Node != "roscoe" {
+		t.Errorf("node = %q", s.Node)
+	}
+	if s.Ended.Day() != 2 {
+		t.Errorf("ended = %s; the home tag's time leaked into the run", s.Ended)
+	}
+	if s.ID != "bf4c" || s.Turns != 1 {
+		t.Errorf("session = %+v", s)
+	}
+}

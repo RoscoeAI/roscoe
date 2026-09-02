@@ -109,7 +109,8 @@ have: from the harness's init event on every run; from each provider's published
 list where one exists; and by asking the installed `claude` directly, pointing
 it at a local endpoint that records the model it puts on the wire and refuses
 the request. That last one costs no tokens and is the only way to answer for
-tier 1, where nothing ever runs through roscoe. `roscoe models --refresh` does
+tier 1, where nothing ever runs through roscoe. It takes about two seconds
+for every alias at once. `roscoe models --refresh` does
 all three.
 
 Up and down move, left and right step through a setting's values, enter types
@@ -231,6 +232,9 @@ the version you are running (`ROSCOE_VERSION` in the installer), so nodes never
 disagree about what roscoe is. The env file is your API keys and only moves
 with `--env`; it lands with mode 600.
 
+After a fleet run its ledger is copied home and tagged with the node, so
+`roscoe sessions` lists it as `on <node>` next to local runs;
+`roscoe sessions --node <name>` (or `all`) pulls any it missed.
 `dispatch` probes every node at once (about half a second for a fleet) and
 picks the ready one with the most free worker slots, `nodes[].workers` less
 the `roscoe run` processes on it; ties go to the first name. When nothing can
