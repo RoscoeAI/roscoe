@@ -245,24 +245,7 @@ func cmdLoop(ctx context.Context, explicit string, args []string) int {
 			fmt.Fprintf(os.Stderr, "[loop] pick it up with: roscoe run --resume %s \"...\"\n", sum.Session)
 		}
 		fmt.Fprintf(os.Stderr, "[loop] working memory: %s\n", loop.Path(*dir))
-		// What a worker charges itself covers tier 2 only; everything its
-		// subagents spend goes to another provider and is otherwise invisible.
-		for up, t := range r.Totals() {
-			line := fmt.Sprintf("[router] %s · %d requests · %d in / %d out", up, t.Requests, t.Input, t.Output)
-			if t.CacheRead+t.CacheWrite > 0 {
-				line += fmt.Sprintf(" · cache %d read / %d write (%.0f%% of prompt)",
-					t.CacheRead, t.CacheWrite, t.CacheHitRate()*100)
-			} else {
-				line += " · no prompt caching reported"
-			}
-			if t.CostUSD > 0 {
-				line += fmt.Sprintf(" · $%.4f", t.CostUSD)
-			}
-			fmt.Fprintln(os.Stderr, line)
-			if led != nil {
-				_ = led.Note("router.totals", map[string]any{"task": *taskID, "upstream": up, "total": t})
-			}
-		}
+		recordRouterTotals(led, r, cfg, *taskID)
 		// Deterministic and model-free, so it is cheap to distil what this
 		// run learned into the cross-run lessons before exiting.
 		if path, rerr := mem.Reflect(context.WithoutCancel(ctx)); rerr == nil && path != "" {

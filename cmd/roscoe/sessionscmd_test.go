@@ -78,3 +78,28 @@ func TestSessionsTableNamesTheNode(t *testing.T) {
 		t.Errorf("local row claims a node: %q", lines[2])
 	}
 }
+
+// A run whose only cost was the harness's guess shows no cost, a marker, and
+// one footnote for the table; priced runs carry no marker.
+func TestSessionsTableMarksUnpriced(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	rows := []sessions.Session{
+		{TaskID: "a", ID: "aaaa1111", Unpriced: 60797, About: "old tier-3 probe", Ended: now.Add(-time.Hour)},
+		{TaskID: "b", ID: "bbbb2222", CostUSD: 0.25, Unpriced: 60003, About: "mixed", Ended: now.Add(-time.Hour)},
+		{TaskID: "c", ID: "cccc3333", CostUSD: 0.0046, RoutedCostUSD: 0.0046, About: "priced by the router", Ended: now.Add(-time.Hour)},
+	}
+	out := sessionsTable(rows, now)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("want header, 3 rows, footnote:\n%s", out)
+	}
+	if !strings.Contains(lines[1], " -*") || !strings.Contains(lines[2], "$0.25*") || strings.Contains(lines[3], "*") {
+		t.Errorf("markers wrong:\n%s", out)
+	}
+	if !strings.Contains(lines[4], "120K tokens") {
+		t.Errorf("footnote = %q", lines[4])
+	}
+	if strings.Contains(sessionsTable(rows[2:], now), "*") {
+		t.Error("a fully priced listing has a footnote")
+	}
+}

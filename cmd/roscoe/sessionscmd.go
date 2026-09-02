@@ -117,6 +117,7 @@ func aboutFromPrompt(text string) string {
 func sessionsTable(list []sessions.Session, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "  %-9s %-9s %-9s %-6s %s\n", "when", "session", "cost", "turns", "about")
+	unpriced := 0
 	for _, s := range list {
 		id := s.ID
 		if id == "" {
@@ -127,6 +128,10 @@ func sessionsTable(list []sessions.Session, now time.Time) string {
 		cost := fmt.Sprintf("$%.2f", s.CostUSD)
 		if s.CostUSD == 0 {
 			cost = "-"
+		}
+		if s.Unpriced > 0 {
+			cost += "*"
+			unpriced += s.Unpriced
 		}
 		about := oneLineOf(s.About, 60)
 		if s.Node != "" { // a fleet run: say where, because --resume there is a different command
@@ -146,7 +151,21 @@ func sessionsTable(list []sessions.Session, now time.Time) string {
 		}
 		fmt.Fprintf(&b, "  %-9s %-9s %-9s %-6d %s\n", sessions.Age(s.Ended, now), id, cost, s.Turns, about)
 	}
+	if unpriced > 0 {
+		fmt.Fprintf(&b, "  %s* plus %s tokens on a routed model the harness priced by guesswork; older runs, no router record. Left out.%s\n",
+			ansiFaint, humanTokens(unpriced), ansiReset)
+	}
 	return b.String()
+}
+
+func humanTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1000:
+		return fmt.Sprintf("%dK", n/1000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func oneLineOf(s string, max int) string {

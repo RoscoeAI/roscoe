@@ -218,8 +218,12 @@ roscoe top                       # spend today and this week, what is running he
 roscoe top --watch 10s           # keep it on a second screen
 ```
 
-Spend comes from the run ledgers, so it is what the harness reported, and
-fleet runs count once they are brought home. `--no-fleet` skips the ssh
+Spend comes from the run ledgers: what the harness billed for its own
+model, plus what the router priced for requests it forwarded to another
+provider (tier 3), which the harness never sees. A model the harness does
+not know (every routed one) it prices by guesswork, and that guess is left
+out; older runs with no router record show a `*` and a footnote with the
+token count instead. Fleet runs count once they are brought home. `--no-fleet` skips the ssh
 probe.
 
 ## Accounts

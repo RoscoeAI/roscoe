@@ -34,6 +34,14 @@ type Session struct {
 	// Node is the fleet node the run happened on, when its ledger was brought
 	// home from one; "" for runs made here.
 	Node string
+	// RoutedCostUSD is what the router priced for requests it forwarded
+	// (tier 3), included in CostUSD. The harness cannot know this spend.
+	RoutedCostUSD float64
+	// Unpriced is tokens the harness billed at a made-up rate for a model it
+	// does not know (costBasis "unknown", e.g. roscoe/tier3) in a run with
+	// no router record to price them properly. Their guessed cost is left
+	// out of CostUSD; the count is kept so the listing can say so.
+	Unpriced int
 }
 
 // Resumable reports whether --resume has something to resume.
@@ -99,6 +107,8 @@ func readLedger(path string) (Session, bool) {
 	defer f.Close()
 
 	s := Session{TaskID: filepath.Base(filepath.Dir(path))}
+	routed := false // a router.totals note priced the forwarded requests
+	unpriced := 0   // tokens the harness guessed a price for
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	var any bool
@@ -134,6 +144,27 @@ func readLedger(path string) (Session, bool) {
 			if rec.Kind == "fleet.home" {
 				s.Node = rec.Node
 			}
+			if rec.Kind == "router.totals" {
+				// {"upstream":..., "total":{...,"cost_usd":...}}, one per
+				// upstream at the end of a run. The router's price is the
+				// only real one for tier 3.
+				var note struct {
+					PricedHere bool `json:"priced_here"`
+					Total      struct {
+						Requests int     `json:"requests"`
+						CostUSD  float64 `json:"cost_usd"`
+					} `json:"total"`
+				}
+				if json.Unmarshal(sc.Bytes(), &note) == nil && note.Total.Requests > 0 {
+					routed = true
+					// The worker's own provider is already on the harness's
+					// bill; only other upstreams add here.
+					if note.PricedHere {
+						s.RoutedCostUSD += note.Total.CostUSD
+						s.CostUSD += note.Total.CostUSD
+					}
+				}
+			}
 			continue
 		}
 		if len(rec.Event) == 0 || string(rec.Event) == "null" {
@@ -147,6 +178,18 @@ func readLedger(path string) (Session, bool) {
 			CWD       string  `json:"cwd"`
 			NumTurns  int     `json:"num_turns"`
 			Cost      float64 `json:"total_cost_usd"`
+			// Per-model breakdown. costBasis "unknown" means the harness
+			// guessed a rate for a model it has never heard of, which is
+			// every routed model: roscoe/tier3 at 60K input tokens came out
+			// at $0.30, opus money for a model that costs half a cent.
+			ModelUsage map[string]struct {
+				Input     int     `json:"inputTokens"`
+				Output    int     `json:"outputTokens"`
+				CacheRead int     `json:"cacheReadInputTokens"`
+				CacheWr   int     `json:"cacheCreationInputTokens"`
+				CostUSD   float64 `json:"costUSD"`
+				CostBasis string  `json:"costBasis"`
+			} `json:"modelUsage"`
 		}
 		if json.Unmarshal(rec.Event, &ev) != nil {
 			continue
@@ -167,7 +210,17 @@ func readLedger(path string) (Session, bool) {
 			// likewise. Sum them, and let the last session id win, since a
 			// trimmed transcript resumes under a new one.
 			s.Turns += ev.NumTurns
-			s.CostUSD += ev.Cost
+			cost := ev.Cost
+			for model, mu := range ev.ModelUsage {
+				if mu.CostBasis == "unknown" || strings.HasPrefix(model, "roscoe/") {
+					cost -= mu.CostUSD
+					unpriced += mu.Input + mu.Output + mu.CacheRead + mu.CacheWr
+				}
+			}
+			if cost < 0 {
+				cost = 0
+			}
+			s.CostUSD += cost
 			if ev.SessionID != "" {
 				s.ID = ev.SessionID
 			}
@@ -178,6 +231,9 @@ func readLedger(path string) (Session, bool) {
 	}
 	if s.Kind == "" && s.ID != "" {
 		s.Kind = "chat/run"
+	}
+	if !routed {
+		s.Unpriced = unpriced
 	}
 	return s, true
 }

@@ -179,3 +179,47 @@ func TestReadLedgerHomeTag(t *testing.T) {
 		t.Errorf("session = %+v", s)
 	}
 }
+
+// The harness prices a model it does not know at a made-up rate and says so
+// with costBasis "unknown". That guess must not reach the listing; the
+// router's own note is the real price, and without one the tokens are
+// reported as unpriced rather than as opus money.
+func TestReadLedgerIgnoresGuessedCosts(t *testing.T) {
+	dir := t.TempDir()
+	write := func(task, ledger string) {
+		if err := os.MkdirAll(filepath.Join(dir, task), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, task, "events.jsonl"), []byte(ledger), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := `{"ts":"2026-08-31T22:44:52Z","task":"%s","seq":2,"event":{"type":"result","num_turns":1,"total_cost_usd":0.304245,"session_id":"s1","modelUsage":{"roscoe/tier3":{"inputTokens":60784,"outputTokens":13,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.304245,"costBasis":"unknown"}}}}
+`
+	// Old run: no router record. Cost is not $0.30; the tokens are unpriced.
+	write("old", fmt.Sprintf(result, "old"))
+	// New run: the router priced the same requests.
+	write("new", fmt.Sprintf(result, "new")+`{"ts":"2026-08-31T22:44:53Z","kind":"router.totals","task":"new","upstream":"deepinfra","priced_here":true,"total":{"requests":1,"input_tokens":60784,"output_tokens":13,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cost_usd":0.0046}}
+{"ts":"2026-08-31T22:44:53Z","kind":"router.totals","task":"new","upstream":"anthropic","priced_here":false,"total":{"requests":4,"input_tokens":9000,"output_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cost_usd":0.09}}
+`)
+	// Mixed run: sonnet's own cost is real and kept; the routed part is not.
+	write("mixed", `{"ts":"2026-08-31T22:44:52Z","task":"mixed","seq":2,"event":{"type":"result","num_turns":3,"total_cost_usd":0.55,"session_id":"s3","modelUsage":{"claude-sonnet-5":{"inputTokens":1000,"outputTokens":200,"costUSD":0.25,"costBasis":"known"},"roscoe/tier3":{"inputTokens":60000,"outputTokens":3,"costUSD":0.30,"costBasis":"unknown"}}}}
+`)
+	list, err := List(dir, 0, nil)
+	if err != nil || len(list) != 3 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	by := map[string]Session{}
+	for _, s := range list {
+		by[s.TaskID] = s
+	}
+	if o := by["old"]; o.CostUSD != 0 || o.Unpriced != 60797 {
+		t.Errorf("old = cost %.4f unpriced %d, want 0 and 60797", o.CostUSD, o.Unpriced)
+	}
+	if n := by["new"]; n.CostUSD < 0.0045 || n.CostUSD > 0.0047 || n.RoutedCostUSD != 0.0046 || n.Unpriced != 0 {
+		t.Errorf("new = %+v; want the router's $0.0046 only (the anthropic leg is on the harness's bill) and nothing unpriced", n)
+	}
+	if m := by["mixed"]; m.CostUSD < 0.2499 || m.CostUSD > 0.2501 || m.Unpriced != 60003 {
+		t.Errorf("mixed = cost %.4f unpriced %d, want sonnet's $0.25 kept", m.CostUSD, m.Unpriced)
+	}
+}

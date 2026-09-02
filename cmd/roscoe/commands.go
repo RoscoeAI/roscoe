@@ -326,6 +326,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	}
 	rctx, rcancel := context.WithCancel(ctx)
 	defer rcancel()
+	defer recordRouterTotals(led, r, cfg, *taskID) // before led.Close, after the run
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.ListenAndServe(rctx) }()
 
@@ -458,6 +459,41 @@ func resolveMiddleAccount(cfg *config.Config, env map[string]string) (name, toke
 	name, token, tried := accounts.Resolve(cfg, cfg.Tiers.Middle.Accounts, env, os.Getenv, accounts.MacKeychain{})
 	fmt.Fprintln(os.Stderr, accounts.Describe(name, tried))
 	return name, token
+}
+
+// recordRouterTotals says and records what went through the router. A worker
+// bills itself for its own model only; everything it forwarded to another
+// provider (tier 3) is spend the harness never sees, and when the harness
+// does see a routed model it guesses a price (roscoe/tier3 at 60K input
+// tokens came out at $0.30, opus money for half a cent of GLM). The note's
+// priced_here marks the upstreams whose cost is real here and not already
+// on the harness's own bill, so the listing adds exactly those.
+func recordRouterTotals(led *ledger.Ledger, r *router.Router, cfg *config.Config, taskID string) {
+	for up, t := range r.Totals() {
+		line := fmt.Sprintf("[router] %s · %d requests · %d in / %d out", up, t.Requests, t.Input, t.Output)
+		if t.CacheRead+t.CacheWrite > 0 {
+			line += fmt.Sprintf(" · cache %d read / %d write (%.0f%% of prompt)",
+				t.CacheRead, t.CacheWrite, t.CacheHitRate()*100)
+		} else {
+			line += " · no prompt caching reported"
+		}
+		if t.CostUSD > 0 {
+			line += fmt.Sprintf(" · $%.4f", t.CostUSD)
+		}
+		fmt.Fprintln(os.Stderr, line)
+		if led != nil {
+			_ = led.Note("router.totals", map[string]any{
+				"task": taskID, "upstream": up, "total": t,
+				"priced_here": pricedHere(cfg, up),
+			})
+		}
+	}
+}
+
+// pricedHere reports whether an upstream's router-priced cost is spend the
+// harness does not already bill: anything but the worker's own provider.
+func pricedHere(cfg *config.Config, upstream string) bool {
+	return upstream != cfg.Tiers.Middle.Provider
 }
 
 func shortID(s string) string {

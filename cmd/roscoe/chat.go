@@ -97,6 +97,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	}
 	rctx, rcancel := context.WithCancel(ctx)
 	defer rcancel()
+	defer recordRouterTotals(led, r, cfg, *taskID)
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.ListenAndServe(rctx) }()
 	addr, err := waitHealthz(ctx, r.Addr, errCh, 3*time.Second)
