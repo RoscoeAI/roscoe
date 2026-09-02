@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"roscoe.sh/roscoe/internal/accounts"
+	"roscoe.sh/roscoe/internal/calibrate"
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/pool"
@@ -113,6 +114,27 @@ func indexOf(xs []string, s string) int {
 		}
 	}
 	return -1
+}
+
+// poolWidth decides how many tasks run at once and says why: the config's
+// limit, tightened by a fresh calibration of this machine when one exists.
+// A stale calibration is not trusted, only mentioned. The account ceiling
+// (accounts × per-account) and the task count apply on top.
+func poolWidth(cfg *config.Config, calib *calibrate.Report, stale string, accountSlots, tasks int) (int, string) {
+	limit := cfg.Limits.MaxParallelTasks
+	why := fmt.Sprintf("limits.max_parallel_tasks %d", limit)
+	switch {
+	case calib == nil:
+		why += " · not calibrated; roscoe calibrate sizes this"
+	case stale != "":
+		why += " · calibration stale (" + stale + "); roscoe calibrate"
+	case calib.Recommend.MaxParallelTasks > 0 && calib.Recommend.MaxParallelTasks < limit:
+		limit = calib.Recommend.MaxParallelTasks
+		why = fmt.Sprintf("calibrated for %d workers (config allows %d)", limit, cfg.Limits.MaxParallelTasks)
+	default:
+		why += " · calibrated"
+	}
+	return pool.EffectiveLimit(limit, accountSlots, tasks), why
 }
 
 // accountPool hands parallel workers their accounts: the least-loaded one

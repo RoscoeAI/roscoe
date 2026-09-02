@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"roscoe.sh/roscoe/internal/accounts"
+	"roscoe.sh/roscoe/internal/calibrate"
 	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/fleet"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/notify"
-	"roscoe.sh/roscoe/internal/pool"
 	"roscoe.sh/roscoe/internal/relay"
 	"roscoe.sh/roscoe/internal/router"
 	"roscoe.sh/roscoe/internal/smoke"
@@ -372,9 +372,15 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		// spread across them, each account under its own ceiling.
 		creds, _ := accounts.ResolveAll(cfg, cfg.Tiers.Middle.Accounts, env, os.Getenv, accounts.MacKeychain{})
 		accts := newAccountPool(creds, cfg.Limits.PerAccountMaxConcurrent)
-		limit := pool.EffectiveLimit(cfg.Limits.MaxParallelTasks, accts.slots(), 1+len(more))
+		var calib *calibrate.Report
+		stale := ""
+		if c, ok := calibrate.Load(calibrationPath(cfg)); ok {
+			calib = &c
+			stale = calibrate.Stale(c, calibrate.Inspect())
+		}
+		limit, why := poolWidth(cfg, calib, stale, accts.slots(), 1+len(more))
 		_ = account
-		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, accts.describe(), workerTask(cfg, addr, accts, *dir))
+		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, accts.describe()+" · "+why, workerTask(cfg, addr, accts, *dir))
 	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 

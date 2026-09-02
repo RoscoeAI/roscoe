@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"roscoe.sh/roscoe/internal/accounts"
+	"roscoe.sh/roscoe/internal/calibrate"
+	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/pool"
 	"roscoe.sh/roscoe/internal/streamjson"
 )
@@ -122,5 +124,37 @@ func TestAccountPoolSpreadsAndCaps(t *testing.T) {
 		t.Errorf("no-account pool returned %q", c.Name)
 	} else {
 		r()
+	}
+}
+
+// The pool's width comes from the config, tightened by a fresh calibration,
+// never by a stale one, and the reason is stated either way.
+func TestPoolWidthHonoursCalibration(t *testing.T) {
+	cfg := config.Default()
+	cfg.Limits.MaxParallelTasks = 8
+	n, why := poolWidth(cfg, nil, "", 0, 10)
+	if n != 8 || !strings.Contains(why, "not calibrated") {
+		t.Errorf("uncalibrated: %d %q", n, why)
+	}
+	cal := &calibrate.Report{Recommend: calibrate.Limits{MaxParallelTasks: 5}}
+	n, why = poolWidth(cfg, cal, "", 0, 10)
+	if n != 5 || !strings.Contains(why, "calibrated for 5 workers (config allows 8)") {
+		t.Errorf("calibrated: %d %q", n, why)
+	}
+	n, why = poolWidth(cfg, cal, "claude was 2.1.259, now 2.2.0", 0, 10)
+	if n != 8 || !strings.Contains(why, "stale (claude was") {
+		t.Errorf("stale: %d %q", n, why)
+	}
+	// A calibration wider than the config does not loosen the config.
+	wide := &calibrate.Report{Recommend: calibrate.Limits{MaxParallelTasks: 12}}
+	if n, _ = poolWidth(cfg, wide, "", 0, 10); n != 8 {
+		t.Errorf("wider calibration loosened the config to %d", n)
+	}
+	// Account slots and task count still cap it.
+	if n, _ = poolWidth(cfg, cal, "", 2, 10); n != 2 {
+		t.Errorf("account slots ignored: %d", n)
+	}
+	if n, _ = poolWidth(cfg, cal, "", 0, 3); n != 3 {
+		t.Errorf("task count ignored: %d", n)
 	}
 }
