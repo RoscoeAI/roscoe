@@ -113,8 +113,9 @@ commands:
                                           the settings; show gives options and what a choice costs
   router [--bind B] [--port N]            run the model router in the foreground
   smoke [--full]                          run the environment smoke checks
-  run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>] [--node N]
-                                          run one task through a local worker, or on node N;
+  run "<prompt>" ["<prompt>"...] [--task-id X] [--dir D] [--resume <session-id>] [--node N]
+                                          run a task through a worker here, or on node N; several prompts run at once,
+                                          up to limits.max_parallel_tasks;
                                           esc interrupts + lets you type a redirect;
                                           --resume migrates + continues an existing claude session
   chat [--dir D] [--resume <session-id>]  hold a conversation with one worker

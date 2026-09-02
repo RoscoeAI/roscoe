@@ -68,6 +68,7 @@ echo "DEEP_INFRA_API_KEY=..." >> ~/.roscoe/.env
 roscoe smoke --full              # proves the whole path: a real claude -p
                                  # harness driven end-to-end by GLM-5.3-Flash
 roscoe run "refactor the billing module"
+roscoe run "port the tests" "update the README" "bump deps"   # several at once, up to limits.max_parallel_tasks
 ```
 
 Every setting is one path. `roscoe config` lists them most-changed first,

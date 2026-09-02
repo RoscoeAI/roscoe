@@ -23,6 +23,7 @@ import (
 	"roscoe.sh/roscoe/internal/fleet"
 	"roscoe.sh/roscoe/internal/ledger"
 	"roscoe.sh/roscoe/internal/notify"
+	"roscoe.sh/roscoe/internal/pool"
 	"roscoe.sh/roscoe/internal/relay"
 	"roscoe.sh/roscoe/internal/router"
 	"roscoe.sh/roscoe/internal/smoke"
@@ -266,7 +267,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		// No prompt argument: ask for it, so `roscoe run --resume <id>` alone
 		// is a usable entry point. Non-interactive callers still get usage.
 		if !isTTY(os.Stdin) {
-			fmt.Fprintln(os.Stderr, `usage: roscoe run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>]`)
+			fmt.Fprintln(os.Stderr, `usage: roscoe run "<prompt>" ["<prompt>"...] [--task-id X] [--dir D] [--resume <session-id>]`)
 			return 2
 		}
 		fmt.Fprint(os.Stderr, "prompt> ")
@@ -285,12 +286,16 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		prompt = rest[0]
 	}
 
-	if len(rest) > 1 { // accept flags after the prompt too, per the synopsis
+	// Flags may follow the prompt, and further quoted arguments are further
+	// prompts: roscoe run "a" "b" "c" runs the three at once.
+	var more []string
+	if len(rest) > 1 {
 		_ = fl.Parse(rest[1:])
-		if fl.NArg() > 0 {
-			fmt.Fprintf(os.Stderr, "roscoe run: unexpected arguments %q (quote the prompt)\n", fl.Args())
-			return 2
-		}
+		more = fl.Args()
+	}
+	if len(more) > 0 && (*resume != "" || *node != "") {
+		fmt.Fprintln(os.Stderr, "roscoe run: several prompts run here, fresh; --resume and --node take one prompt")
+		return 2
 	}
 	// Flags are all known from here on; --resume read before this point was
 	// ignored when it came after the prompt.
@@ -362,6 +367,14 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	fmt.Fprintf(os.Stderr, "[router] listening on %s\n", addr)
 
 	account, token := resolveMiddleAccount(cfg, env)
+	if len(more) > 0 {
+		perAccount := 0
+		if account != "" {
+			perAccount = cfg.Limits.PerAccountMaxConcurrent
+		}
+		limit := pool.EffectiveLimit(cfg.Limits.MaxParallelTasks, perAccount, 1+len(more))
+		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, workerTask(cfg, addr, account, token, *dir))
+	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 
 	// Esc interrupts the running task at a clean point; typing a line then
