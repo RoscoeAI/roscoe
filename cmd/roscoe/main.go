@@ -94,7 +94,7 @@ func realMain() int {
 	case "accounts":
 		return cmdAccounts(ctx, *cfgPath, rest)
 	case "top":
-		return cmdStub(cmd)
+		return cmdTop(ctx, *cfgPath, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "roscoe: unknown command %q\n\n", cmd)
 		usage()
@@ -136,7 +136,7 @@ commands:
   status                                  the node table (same as node)
   up [deploy flags]                       deploy to every enabled node, then show what is left to do
   accounts [set <name>]                   which Claude credentials the fleet has, and storing one
-  top                                     coming (see ARCHITECTURE.md)
+  top [--watch 10s] [--no-fleet]          the day at a glance: spend today and this week, what is running, recent sessions
 
 --config defaults to ./roscoe.json, falling back to ~/.roscoe/roscoe.json.
 `)

@@ -211,6 +211,17 @@ Replies arrive over an outbound WebSocket and queue server-side while your
 laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 `roscoe relay listen`.
 
+## The day at a glance
+
+```
+roscoe top                       # spend today and this week, what is running here and on the fleet, recent sessions
+roscoe top --watch 10s           # keep it on a second screen
+```
+
+Spend comes from the run ledgers, so it is what the harness reported, and
+fleet runs count once they are brought home. `--no-fleet` skips the ssh
+probe.
+
 ## Accounts
 
 Workers run under the first account in `tiers.middle.accounts` whose token
@@ -274,7 +285,7 @@ screen names the model codex will actually run instead. Multi-node:
 `node`/`status` (what is on each machine), `deploy` and `up` (put roscoe
 there, pinned to your version), `run --node` (one task on one machine) and
 `dispatch` (one task on the freest machine) work today; what is still in
-flight is `roscoe top`,
+flight is
 as are the account vault (`accounts`), MCP dispatch into your interactive
 session, and a `roscoe top` TUI.
 Pure Go; a single dependency (`coder/websocket`, for the relay bridge).
