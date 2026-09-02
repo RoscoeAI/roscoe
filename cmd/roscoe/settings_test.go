@@ -310,3 +310,17 @@ func TestMCPRow(t *testing.T) {
 		}
 	}
 }
+
+// The panel's help line carries the cost line the /config card has, so the
+// two surfaces say the same thing about a knob.
+func TestNoteForRowCarriesTheEffect(t *testing.T) {
+	for _, r := range settingsRows(config.Default()) {
+		if r.path == "tiers.middle.effort" {
+			if n := noteForRow(r); !strings.Contains(n, "ultracode adds") || !strings.HasPrefix(n, "tiers.middle.effort: ") {
+				t.Errorf("effort note = %q", n)
+			}
+			return
+		}
+	}
+	t.Fatal("no effort row")
+}

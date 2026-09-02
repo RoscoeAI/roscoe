@@ -283,10 +283,17 @@ func noteForRow(row settingRow) string {
 	if !row.editable() {
 		return row.label + ": " + row.why
 	}
-	if d := config.Describe(row.path); d != "" {
-		return row.path + ": " + d
+	// The same two parts the /config card leads with: what it does, and what
+	// the choice means for cost or interruptions, when there is such a line.
+	d := config.DocFor(row.path)
+	if d.What == "" {
+		return row.path
 	}
-	return row.path
+	note := row.path + ": " + d.What
+	if d.Effect != "" {
+		note += " · " + d.Effect
+	}
+	return note
 }
 
 // applySetting validates in memory before writing, and puts the old value
