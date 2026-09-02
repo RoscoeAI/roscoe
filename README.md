@@ -232,6 +232,12 @@ out; older runs with no router record show a `*` and a footnote with the
 token count instead. Fleet runs count once they are brought home. `--no-fleet` skips the ssh
 probe.
 
+When a cost needs explaining, `ROSCOE_DUMP_REQUESTS=<dir> roscoe run ...`
+writes every request body the router forwards into that directory,
+numbered in order and without headers, so two runs can be diffed. That is
+how it was found that a worker's first message carries `git status` under
+its own cache breakpoint, rewritten whenever the tree changes.
+
 ## Accounts
 
 Workers run under the first account in `tiers.middle.accounts` whose token

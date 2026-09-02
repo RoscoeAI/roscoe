@@ -14,9 +14,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,19 +36,28 @@ type Options struct {
 	LogW io.Writer         // JSONL request log, may be nil
 	Bind string            // override; "" → cfg.Router.Bind
 	Port int               // override; 0 → cfg.Router.Port
+	// DumpDir, when set, writes every request body the router receives to a
+	// file there, so a prompt prefix can be diffed between two runs. It is
+	// how the "why did this worker write 10K tokens of cache" question gets
+	// answered with bytes instead of guesses. The environment variable
+	// ROSCOE_DUMP_REQUESTS sets it when this is empty. Bodies contain the
+	// full prompt; headers (and so credentials) are never written.
+	DumpDir string
 }
 
 // Router dispatches /v1/messages traffic between Anthropic-protocol upstreams
 // by the request body's model name. The listener is claimed in New so Addr is
 // valid immediately (ephemeral ports included); ListenAndServe serves on it.
 type Router struct {
-	env    map[string]string
-	logW   io.Writer
-	logMu  sync.Mutex
-	client *http.Client
-	mux    *http.ServeMux
-	ln     net.Listener
-	addr   string
+	env     map[string]string
+	logW    io.Writer
+	logMu   sync.Mutex
+	dumpDir string
+	dumpN   atomic.Int64
+	client  *http.Client
+	mux     *http.ServeMux
+	ln      net.Listener
+	addr    string
 
 	virtual     string // tier-3 wire name, e.g. "roscoe/tier3"
 	subModel    string // what the virtual name rewrites to
@@ -106,8 +118,9 @@ func New(o Options) (*Router, error) {
 	}
 
 	rt := &Router{
-		env:  o.Env,
-		logW: o.LogW,
+		dumpDir: firstNonEmpty(o.DumpDir, os.Getenv("ROSCOE_DUMP_REQUESTS")),
+		env:     o.Env,
+		logW:    o.LogW,
 		client: &http.Client{
 			// No overall timeout: SSE streams run for minutes.
 			Transport: &http.Transport{
@@ -246,6 +259,7 @@ func (rt *Router) handleProxy(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	e.BytesIn = len(body)
+	rt.dump(req.URL.Path, body)
 
 	// Route by model. An unparsable body or absent model falls through to the
 	// default route untouched — the upstream owns rejecting it.
@@ -444,4 +458,24 @@ func writeAPIError(w http.ResponseWriter, status int, msg string) {
 		quoted = []byte(`"internal error"`)
 	}
 	fmt.Fprintf(w, `{"type":"error","error":{"type":"api_error","message":%s}}`, quoted)
+}
+
+// dump writes one request body to DumpDir, numbered in arrival order so two
+// runs' requests line up for a diff. Failures are ignored: a debugging aid
+// must never fail a request.
+func (rt *Router) dump(path string, body []byte) {
+	if rt.dumpDir == "" {
+		return
+	}
+	n := rt.dumpN.Add(1)
+	name := fmt.Sprintf("%03d-%s.json", n, strings.Trim(strings.ReplaceAll(path, "/", "_"), "_"))
+	_ = os.MkdirAll(rt.dumpDir, 0o755)
+	_ = os.WriteFile(filepath.Join(rt.dumpDir, name), body, 0o600)
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
