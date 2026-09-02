@@ -71,6 +71,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	// One session for the whole chat: the first turn may import an existing
 	// transcript, every later turn resumes what the worker just wrote.
 	session, resumeFrom := "", ""
+	resumeBudget := 0 // 0 = default window; halved when the model refuses it as too long
 	if *resume != "" {
 		src, err := worker.FindSession(*fromConfig, *resume)
 		if err != nil {
@@ -338,21 +339,44 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		go func() { inputDone <- ti.run(turnCtx, sc, keys, cancelTurn) }()
 		nar := &narrator{sc: sc} // per turn: streaming state must not leak across turns
 
-		res, runErr := worker.Run(turnCtx,
-			worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token, Resume: session, ResumeFrom: resumeFrom},
-			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led,
-				OnNotice: func(m string) { sc.Printf("%s%s%s", ansiDim, m, ansiReset) },
-				OnEvent: func(ev *streamjson.Event) {
-					if ie, ok := ev.AsInit(); ok {
-						if ie.SessionID != "" {
-							session = ie.SessionID
-						}
-						// The harness just told us what the alias resolves to.
-						learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
+		opts := worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led,
+			OnNotice: func(m string) { sc.Printf("%s%s%s", ansiDim, m, ansiReset) },
+			OnEvent: func(ev *streamjson.Event) {
+				if ie, ok := ev.AsInit(); ok {
+					if ie.SessionID != "" {
+						session = ie.SessionID
 					}
-					narrateTo(sc, ev)
-				}},
-		)
+					// The harness just told us what the alias resolves to.
+					learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
+				}
+				narrateTo(sc, ev)
+			}}
+		var res *streamjson.ResultEvent
+		var runErr error
+		// A resumed window the model refuses as too long costs nothing and
+		// says so in the result. Halve the window and send the same message
+		// again, a few times, rather than leaving the operator with a stalled
+		// box and an error that is roscoe's to fix.
+		for attempt := 0; ; attempt++ {
+			res, runErr = worker.Run(turnCtx,
+				worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token,
+					Resume: session, ResumeFrom: resumeFrom, ResumeBudget: resumeBudget},
+				opts)
+			if runErr != nil || res == nil || !res.IsError || !worker.PromptTooLong(res.Result) || attempt >= 3 || turnCtx.Err() != nil {
+				break
+			}
+			dir, derr := worker.SessionConfigDir(cfg, *taskID, token)
+			if derr != nil {
+				break
+			}
+			path, ferr := worker.FindSession(dir, session)
+			if ferr != nil {
+				break
+			}
+			resumeBudget = worker.HalveBudget(resumeBudget)
+			resumeFrom = path
+			sc.Printf("%sthe model refused that much history · retrying with the most recent %dKB%s", ansiDim, resumeBudget/1024, ansiReset)
+		}
 		cancelTurn()
 		acted := <-inputDone
 		sc.SetPrompt("", "", "", "")
@@ -368,7 +392,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		// the next worker.Run imports the session into a fresh, smaller id.
 		if session != "" {
 			if dir, derr := worker.SessionConfigDir(cfg, *taskID, token); derr == nil {
-				if path, ferr := worker.FindSession(dir, session); ferr == nil && worker.Oversized(path) {
+				if path, ferr := worker.FindSession(dir, session); ferr == nil && worker.OversizedBy(path, resumeBudget) {
 					resumeFrom = path
 					sc.Printf("%stranscript is large · trimming to recent messages before the next turn%s", ansiFaint, ansiReset)
 				}

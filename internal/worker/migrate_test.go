@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -370,5 +371,114 @@ func TestFirstMessageSkipsPlumbing(t *testing.T) {
 	_ = os.WriteFile(empty, []byte(`{"type":"system"}`+"\n"), 0o600)
 	if _, err := FirstMessage(empty); err == nil {
 		t.Error("a transcript with no operator message gave no error")
+	}
+}
+
+// The window is in bytes but the limit is tokens: a 399KB window was refused
+// as too long on a real session. The default must leave room for the ~52K
+// token worker prefix on a 200K context.
+func TestResumeBudgetIsTokenSafe(t *testing.T) {
+	if maxResumeBytes > 256<<10 {
+		t.Errorf("maxResumeBytes = %d; over 256KB the API refused the prompt", maxResumeBytes)
+	}
+	if DefaultResumeBudget() != maxResumeBytes {
+		t.Error("DefaultResumeBudget disagrees with the constant")
+	}
+	cases := map[int]int{0: maxResumeBytes / 2, maxResumeBytes: maxResumeBytes / 2, 100 << 10: 50 << 10, 40 << 10: 32 << 10, 10: 32 << 10}
+	for in, want := range cases {
+		if got := HalveBudget(in); got != want {
+			t.Errorf("HalveBudget(%d) = %d, want %d", in, got, want)
+		}
+	}
+	for text, want := range map[string]bool{"Prompt is too long": true, "prompt is too long for this model": true, "ok": false, "": false} {
+		if PromptTooLong(text) != want {
+			t.Errorf("PromptTooLong(%q) = %v", text, !want)
+		}
+	}
+}
+
+func TestTrimTranscriptToHonoursBudget(t *testing.T) {
+	var b strings.Builder
+	line := strings.Repeat("y", 1000)
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&b, `{"type":"user","n":%d,"text":%q}`+"\n", i, line)
+	}
+	kept, dropped, err := trimTranscriptTo(strings.NewReader(b.String()), 10_500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dropped || len(kept) != 10 {
+		t.Errorf("kept %d records (dropped=%v), want the 10 most recent", len(kept), dropped)
+	}
+	if !strings.Contains(string(kept[len(kept)-1]), `"n":99`) || !strings.Contains(string(kept[0]), `"n":90`) {
+		t.Errorf("wrong records kept: first %s", kept[0][:30])
+	}
+	// A zero budget means the default.
+	kept, _, _ = trimTranscriptTo(strings.NewReader(b.String()), 0)
+	if len(kept) != 100 {
+		t.Errorf("default budget kept %d of 100 small records", len(kept))
+	}
+}
+
+// One 200KB tool result must not eat the resume window: clip it inside the
+// record and keep everything else in the record as it was.
+func TestClipRecordShrinksHugeToolResults(t *testing.T) {
+	huge := strings.Repeat("z", 200_000)
+	rec := fmt.Sprintf(`{"type":"user","sessionId":"s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":%q},{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":%q}]},{"type":"text","text":"keep me"}]}}`, huge, huge)
+	out := clipRecord([]byte(rec))
+	if len(out) > maxRecordBytes {
+		t.Fatalf("clipped record is still %d bytes", len(out))
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("clipped record does not parse: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "keep me") || !strings.Contains(s, `"tool_use_id":"t1"`) || !strings.Contains(s, "clipped by roscoe") {
+		t.Errorf("clip lost structure: %s", s[:200])
+	}
+	if strings.Count(s, "clipped by roscoe") != 2 {
+		t.Errorf("both oversized results should be clipped, got %d markers", strings.Count(s, "clipped by roscoe"))
+	}
+	// Small records and unparseable ones are returned as they were.
+	small := []byte(`{"type":"user","message":{"content":[{"type":"tool_result","content":"tiny"}]}}`)
+	if string(clipRecord(small)) != string(small) {
+		t.Error("a small record was rewritten")
+	}
+	bad := []byte(`{"type":"user", not json`)
+	if string(clipRecord(bad)) != string(bad) {
+		t.Error("an unparseable record was altered")
+	}
+	// And the trimmer applies it: a transcript of huge tool results fits many
+	// more messages than whole-record trimming would keep.
+	var b strings.Builder
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, `{"type":"user","n":%d,"message":{"role":"user","content":[{"type":"tool_result","content":%q}]}}`+"\n", i, huge)
+	}
+	kept, _, err := trimTranscriptTo(strings.NewReader(b.String()), maxResumeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 20 {
+		t.Errorf("kept %d of 20 clipped records; clipping should make them all fit", len(kept))
+	}
+}
+
+// A smaller budget flows through the import: the retry path depends on it.
+func TestImportSessionWithSmallerBudget(t *testing.T) {
+	src, destCfg := oversizedTranscript(t)
+	newID, err := importSessionWithBudget(src, destCfg, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", nil, 120<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(filepath.Join(destCfg, "projects", "-Users-tim-code-app", newID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) > 120<<10+1024 {
+		t.Errorf("trimmed to %d bytes, want within the 120KB budget", len(out))
+	}
+	if !OversizedBy(src, 120<<10) || OversizedBy(src, 100<<20) {
+		t.Error("OversizedBy does not honour its budget")
 	}
 }

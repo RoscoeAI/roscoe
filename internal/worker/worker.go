@@ -40,6 +40,10 @@ type Task struct {
 	// session migrates into the fleet.
 	Resume     string
 	ResumeFrom string
+	// ResumeBudget is the transcript window (bytes) an import trims to; 0 is
+	// the default. Chat shrinks it when the model refuses a window as too
+	// long and keeps the smaller value for the rest of the session.
+	ResumeBudget int
 }
 
 // Opts carries the shared wiring a worker run needs.
@@ -121,7 +125,7 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 			// without a TUI have nowhere else to put it.
 			notify = func(m string) { fmt.Fprintln(os.Stderr, "roscoe: "+m) }
 		}
-		resumeID, err := importSession(t.ResumeFrom, ccfgDir, t.Resume, notify)
+		resumeID, err := importSessionWithBudget(t.ResumeFrom, ccfgDir, t.Resume, notify, t.ResumeBudget)
 		if err != nil {
 			return nil, err
 		}

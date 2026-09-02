@@ -38,15 +38,61 @@ func FindSession(configDir, sessionID string) (string, error) {
 // compacted window in memory, but `claude -p --resume` rebuilds the whole
 // on-disk log into one request, so a long conversation blows the context
 // window before compaction can run. Trimming keeps resume working.
-const maxResumeBytes = 400 << 10
+//
+// The cap is in bytes because that is what the file has, but the limit that
+// matters is tokens. Tool-heavy transcript JSON packs at roughly three
+// characters per token, and the worker's own prefix is ~52K tokens on a 200K
+// window, so the transcript gets about 80K tokens: ~240KB. The previous cap
+// of 400KB produced a 399KB window that the API rejected with "Prompt is too
+// long" on the first turn. When a window still does not fit, chat halves it
+// and retries (see HalveBudget); this is the starting point, not a promise.
+const maxResumeBytes = 240 << 10
+
+// maxRecordBytes is the size past which a single kept record has its tool
+// results clipped. Records are kept or dropped whole, so one 200KB tool
+// result would otherwise eat most of the window on its own.
+const maxRecordBytes = 24 << 10
+
+// clipToBytes is how much of an oversized tool result survives.
+const clipToBytes = 4 << 10
+
+// DefaultResumeBudget is the transcript window a resume starts with.
+func DefaultResumeBudget() int { return maxResumeBytes }
+
+// HalveBudget is the next window to try after the model refused the current
+// one as too long. It never goes below 32KB: past that, resuming is pointless
+// and starting fresh is the honest answer.
+func HalveBudget(current int) int {
+	if current <= 0 {
+		current = maxResumeBytes
+	}
+	next := current / 2
+	if next < 32<<10 {
+		next = 32 << 10
+	}
+	return next
+}
+
+// PromptTooLong reports whether a turn's result text is the API refusing the
+// request for size, which is what an oversized resume window produces.
+func PromptTooLong(result string) bool {
+	return strings.Contains(strings.ToLower(result), "prompt is too long")
+}
 
 // Oversized reports whether a session transcript has grown past the point
 // where resuming it whole is a bad idea. Chat asks this after every turn: the
 // import trims once, but `claude -p --resume` appends every turn after that,
 // and one substantive turn was measured to grow a 400KB import to 689KB.
-func Oversized(path string) bool {
+func Oversized(path string) bool { return OversizedBy(path, maxResumeBytes) }
+
+// OversizedBy is Oversized against a specific window (0 means the default),
+// for a chat that has already had to shrink its window once.
+func OversizedBy(path string, budget int) bool {
+	if budget <= 0 {
+		budget = maxResumeBytes
+	}
 	fi, err := os.Stat(path)
-	return err == nil && fi.Size() > maxResumeBytes
+	return err == nil && fi.Size() > int64(budget)
 }
 
 // SessionConfigDir is where a task's transcripts live: the operator's own
@@ -85,6 +131,14 @@ func conversationRecord(line []byte) bool {
 // truncated to fit maxResumeBytes, in original order. Whole records are kept
 // or dropped: a half-record would not parse.
 func trimTranscript(r io.Reader) ([][]byte, bool, error) {
+	return trimTranscriptTo(r, maxResumeBytes)
+}
+
+// trimTranscriptTo is trimTranscript with an explicit byte budget.
+func trimTranscriptTo(r io.Reader, budget int) ([][]byte, bool, error) {
+	if budget <= 0 {
+		budget = maxResumeBytes
+	}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 32<<20)
 	var kept [][]byte
@@ -98,12 +152,14 @@ func trimTranscript(r io.Reader) ([][]byte, bool, error) {
 			dropped = true
 			continue
 		}
+		if len(line) > maxRecordBytes {
+			line = clipRecord(line)
+		}
 		kept = append(kept, line)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, false, fmt.Errorf("worker: read transcript: %w", err)
 	}
-	budget := maxResumeBytes
 	cut := len(kept)
 	for i := len(kept) - 1; i >= 0; i-- {
 		if budget-len(kept[i]) < 0 {
@@ -117,6 +173,67 @@ func trimTranscript(r io.Reader) ([][]byte, bool, error) {
 	return kept[cut:], dropped, nil
 }
 
+// clipRecord shortens the tool results inside one transcript record so a
+// single huge tool output cannot dominate the resume window. Everything else
+// in the record is left as it was; anything that does not parse is returned
+// untouched, because a record we cannot understand is one we must not edit.
+func clipRecord(line []byte) []byte {
+	var rec map[string]any
+	if json.Unmarshal(line, &rec) != nil {
+		return line
+	}
+	msg, ok := rec["message"].(map[string]any)
+	if !ok {
+		return line
+	}
+	items, ok := msg["content"].([]any)
+	if !ok {
+		return line
+	}
+	changed := false
+	for _, it := range items {
+		block, ok := it.(map[string]any)
+		if !ok || block["type"] != "tool_result" {
+			continue
+		}
+		switch c := block["content"].(type) {
+		case string:
+			if len(c) > clipToBytes {
+				block["content"] = clipText(c)
+				changed = true
+			}
+		case []any:
+			for _, part := range c {
+				pm, ok := part.(map[string]any)
+				if !ok {
+					continue
+				}
+				if t, ok := pm["text"].(string); ok && len(t) > clipToBytes {
+					pm["text"] = clipText(t)
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return line
+	}
+	out, err := json.Marshal(rec)
+	if err != nil {
+		return line
+	}
+	return out
+}
+
+func clipText(s string) string {
+	// Cut on a rune boundary, then say what happened where the rest was.
+	cut := clipToBytes
+	for cut > 0 && cut < len(s) && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("\n[… %d more bytes clipped by roscoe so this conversation could be resumed]", len(s)-cut)
+}
+
 // importSession copies a session transcript into destConfigDir, preserving
 // the project-directory name (it encodes the session's original cwd, which
 // claude uses to associate the transcript). Oversized transcripts are trimmed
@@ -125,6 +242,14 @@ func trimTranscript(r io.Reader) ([][]byte, bool, error) {
 // importSession returns the session id to resume: the original when the
 // transcript is usable as-is, or a new id naming a trimmed copy.
 func importSession(srcPath, destConfigDir, sessionID string, notify func(string)) (string, error) {
+	return importSessionWithBudget(srcPath, destConfigDir, sessionID, notify, maxResumeBytes)
+}
+
+// importSessionWithBudget is importSession with an explicit resume window.
+func importSessionWithBudget(srcPath, destConfigDir, sessionID string, notify func(string), budget int) (string, error) {
+	if budget <= 0 {
+		budget = maxResumeBytes
+	}
 	projectDir := filepath.Base(filepath.Dir(srcPath))
 	destDir := filepath.Join(destConfigDir, "projects", projectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -132,8 +257,8 @@ func importSession(srcPath, destConfigDir, sessionID string, notify func(string)
 	}
 	dest := filepath.Join(destDir, filepath.Base(srcPath))
 
-	if fi, err := os.Stat(srcPath); err == nil && fi.Size() > maxResumeBytes {
-		return trimIntoNewSession(srcPath, destDir, sessionID, notify)
+	if fi, err := os.Stat(srcPath); err == nil && fi.Size() > int64(budget) {
+		return trimIntoNewSession(srcPath, destDir, sessionID, notify, budget)
 	}
 	if _, err := os.Stat(dest); err == nil {
 		return sessionID, nil // already imported (re-resume)
@@ -158,14 +283,14 @@ func importSession(srcPath, destConfigDir, sessionID string, notify func(string)
 // transcript under a fresh session id, leaving the original log untouched.
 // The ids inside each record are rewritten so claude reads a coherent
 // session.
-func trimIntoNewSession(srcPath, destDir, sessionID string, notify func(string)) (string, error) {
+func trimIntoNewSession(srcPath, destDir, sessionID string, notify func(string), budget int) (string, error) {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return "", fmt.Errorf("worker: open source transcript: %w", err)
 	}
 	defer src.Close()
 
-	lines, _, err := trimTranscript(src)
+	lines, _, err := trimTranscriptTo(src, budget)
 	if err != nil {
 		return "", err
 	}

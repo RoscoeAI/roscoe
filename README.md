@@ -151,7 +151,9 @@ declaring one is a cost decision made on purpose.
 
 Finding a conversation again does not need its id. `roscoe sessions` lists what
 has run, newest first, with what each cost and the first thing you said;
-`roscoe chat --last` resumes the newest, and `roscoe chat --pick` offers a
+A conversation too large to reload whole is resumed from its most recent
+messages, sized to fit the model; if the model still refuses the window as
+too long, chat halves it and retries on its own. `roscoe chat --last` resumes the newest, and `roscoe chat --pick` offers a
 numbered list.
 
 ## Working a charter, not a prompt
