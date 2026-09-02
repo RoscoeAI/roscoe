@@ -1,6 +1,9 @@
 package main
 
-import "unicode"
+import (
+	"strings"
+	"unicode"
+)
 
 // lineEditor is a single line with a cursor. Both the prompt and the
 // during-turn box use it, so left and right, home and end, word jumps and
@@ -125,6 +128,28 @@ func (e *lineEditor) KillToStart() bool {
 	return true
 }
 
+// Newline inserts a line break at the cursor. Pasted text and alt-enter use
+// it; plain enter still submits, so a stack trace can be pasted whole without
+// the first line going out on its own.
+func (e *lineEditor) Newline() { e.Insert('\n') }
+
+// Lines splits the buffer on newlines.
+func (e *lineEditor) Lines() []string { return strings.Split(string(e.buf), "\n") }
+
+// LineCol is the cursor's position as a line index and rune column within
+// that line, for placing the terminal cursor in a multi-row box.
+func (e *lineEditor) LineCol() (line, col int) {
+	for i := 0; i < e.cur && i < len(e.buf); i++ {
+		if e.buf[i] == '\n' {
+			line++
+			col = 0
+		} else {
+			col++
+		}
+	}
+	return line, col
+}
+
 // applyEditKey performs a named key on the editor and reports whether it was
 // an editing key at all. Callers handle enter, tab, esc and history first;
 // everything that only moves or mutates the line lands here, so the prompt
@@ -153,6 +178,12 @@ func (e *lineEditor) applyEditKey(key string) bool {
 		e.KillToEnd()
 	case "\x15":
 		e.KillToStart()
+	case "newline", "alt-enter":
+		e.Newline()
+	case "\t":
+		// Only reachable inside a paste; the prompt handles tab as completion
+		// before it gets here. Keep the rune so the pasted text is faithful.
+		e.Insert('\t')
 	default:
 		if r := []rune(key); len(r) == 1 && r[0] >= 0x20 && r[0] != 0x7f {
 			e.Insert(r[0])

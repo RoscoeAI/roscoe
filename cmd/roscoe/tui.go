@@ -9,8 +9,21 @@ import (
 	"sync"
 )
 
-// boxRows is how many bottom rows the input box occupies: border, input, border.
+// boxRows is how many bottom rows a single-line input box occupies: border,
+// input, border. The box grows by one row per extra input line, up to
+// maxInputRows, then windows vertically around the cursor's line.
 const boxRows = 3
+
+const maxInputRows = 8
+
+// bracketedPasteOn asks the terminal to wrap pasted text in ESC[200~ and
+// ESC[201~, so a pasted stack trace's newlines insert instead of submitting
+// its first line early. bracketedPasteOff restores the default on exit; a
+// terminal left in paste mode confuses the next program.
+const (
+	bracketedPasteOn  = "\x1b[?2004h"
+	bracketedPasteOff = "\x1b[?2004l"
+)
 
 // ANSI palette, matched to roscoe.sh: phosphor green accent on the terminal's
 // own ground, dim parchment for secondary text.
@@ -73,11 +86,20 @@ func (s *screen) measure() {
 
 // boxHeight is the bottom region the prompt owns: the box, plus a row for the
 // help note when there is one.
-func (s *screen) boxHeight() int {
-	if s.note != "" {
-		return boxRows + 1
+func (s *screen) inputRows() int {
+	n := strings.Count(s.input, "\n") + 1
+	if n > maxInputRows {
+		n = maxInputRows
 	}
-	return boxRows
+	return n
+}
+
+func (s *screen) boxHeight() int {
+	h := boxRows - 1 + s.inputRows()
+	if s.note != "" {
+		h++
+	}
+	return h
 }
 
 func (s *screen) viewHeight() int {
@@ -92,7 +114,7 @@ func (s *screen) Enter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = true
-	fmt.Fprint(os.Stdout, "\x1b[2J")
+	fmt.Fprint(os.Stdout, "\x1b[2J"+bracketedPasteOn)
 	s.repaintLocked()
 }
 
@@ -104,7 +126,7 @@ func (s *screen) Leave() {
 		return
 	}
 	s.active = false
-	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s\n", s.rows, ansiClrEOL, ansiShow)
+	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s\n", bracketedPasteOff, s.rows, ansiClrEOL, ansiShow)
 }
 
 // Print appends output. Long lines are wrapped here so scroll math matches
@@ -162,9 +184,10 @@ func (s *screen) SetPrompt(prompt, input, hint, note string) {
 func (s *screen) SetPromptCursor(prompt, input string, cursor int, hint, note string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	resized := (s.note == "") != (note == "")
+	before := s.boxHeight()
 	s.prompt, s.input, s.hint, s.note = prompt, input, hint, note
 	s.cursor = cursor
+	resized := s.boxHeight() != before
 	if resized {
 		s.repaintLocked()
 		return
@@ -227,7 +250,8 @@ func (s *screen) repaintLocked() {
 	s.drawBoxLocked()
 }
 
-// drawBoxLocked paints the three-row input box across the bottom.
+// drawBoxLocked paints the input box across the bottom: a border, one row per
+// input line (windowed around the cursor's line past maxInputRows), a border.
 func (s *screen) drawBoxLocked() {
 	if !s.active {
 		return
@@ -240,59 +264,73 @@ func (s *screen) drawBoxLocked() {
 	if s.offset > 0 {
 		label = fmt.Sprintf("%d↑ %s", s.offset, s.prompt)
 	}
+	lw := len([]rune(label))
+	lines := strings.Split(s.input, "\n")
+	curLine, curCol := cursorLineCol(s.input, s.cursor)
 
-	// Window the input around the cursor when it is wider than the box, so
-	// editing the middle of a long line shows the part being edited rather
-	// than always the tail.
-	in := []rune(s.input)
-	cur := s.cursor
-	if cur < 0 {
-		cur = 0
-	}
-	if cur > len(in) {
-		cur = len(in)
-	}
-	avail := inner - 2 - len([]rune(label))
+	rowsShown := s.inputRows()
+	vstart := inputWindow(len(lines), curLine, rowsShown)
+	avail := inner - 2 - lw
 	if avail < 1 {
 		avail = 1
 	}
-	ws := inputWindow(len(in), cur, avail)
-	we := ws + avail
-	if we > len(in) {
-		we = len(in)
-	}
-	shown := string(in[ws:we])
-	rest := inner - 1 - len([]rune(label)) - (we - ws)
-	if rest < 0 {
-		rest = 0
-	}
-	hint := s.hint
-	if ws > 0 || we < len(in) { // a scrolled line has no room for ghost text
-		hint = ""
-	}
-	if len([]rune(hint)) > rest {
-		hint = string([]rune(hint)[:rest])
-	}
-	pad := rest - len([]rune(hint))
+	// Horizontal window follows the cursor on its own line; other lines are
+	// simply cut to fit.
+	ws := inputWindow(len([]rune(lines[curLine])), curCol, avail)
 
+	top := s.rows - rowsShown - 1
+	var b strings.Builder
+	b.WriteString(ansiHide)
 	if s.note != "" {
 		note := s.note
 		if len([]rune(note)) > s.cols-2 {
 			note = string([]rune(note)[:s.cols-2])
 		}
-		fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s %s%s%s",
-			ansiHide, s.rows-3, ansiClrEOL, ansiDim, note, ansiReset)
+		fmt.Fprintf(&b, "\x1b[%d;1H%s %s%s%s", top-1, ansiClrEOL, ansiDim, note, ansiReset)
 	}
-	fmt.Fprintf(os.Stdout, "%s\x1b[%d;1H%s%s╭%s╮%s",
-		ansiHide, s.rows-2, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
-	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s│%s %s%s%s%s%s%s%s│%s",
-		s.rows-1, ansiClrEOL, ansiFaint, ansiReset,
-		ansiGreen+label+ansiReset, shown,
-		ansiFaint, hint, ansiReset, strings.Repeat(" ", pad), ansiFaint, ansiReset)
-	fmt.Fprintf(os.Stdout, "\x1b[%d;1H%s%s╰%s╯%s",
-		s.rows, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
-	// Put the terminal cursor where the insertion point is.
-	fmt.Fprintf(os.Stdout, "\x1b[%d;%dH%s", s.rows-1, 3+len([]rune(label))+(cur-ws), ansiShow)
+	fmt.Fprintf(&b, "\x1b[%d;1H%s%s╭%s╮%s", top, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
+
+	for j := 0; j < rowsShown; j++ {
+		li := vstart + j
+		row := top + 1 + j
+		text := []rune(strings.ReplaceAll(lines[li], "\t", "    "))
+		start := 0
+		if li == curLine {
+			start = ws
+		}
+		end := start + avail
+		if end > len(text) {
+			end = len(text)
+		}
+		if start > len(text) {
+			start = len(text)
+		}
+		shown := string(text[start:end])
+		lead := ansiGreen + label + ansiReset
+		if j > 0 || vstart > 0 {
+			lead = strings.Repeat(" ", lw) // continuation rows align under the text
+		}
+		used := lw + (end - start)
+		rest := inner - 1 - used
+		if rest < 0 {
+			rest = 0
+		}
+		hint := ""
+		if len(lines) == 1 && ws == 0 && end == len(text) { // ghost text only fits a single, unscrolled line
+			hint = s.hint
+			if len([]rune(hint)) > rest {
+				hint = string([]rune(hint)[:rest])
+			}
+		}
+		pad := rest - len([]rune(hint))
+		fmt.Fprintf(&b, "\x1b[%d;1H%s%s│%s %s%s%s%s%s%s%s│%s",
+			row, ansiClrEOL, ansiFaint, ansiReset,
+			lead, shown, ansiFaint, hint, ansiReset, strings.Repeat(" ", pad), ansiFaint, ansiReset)
+	}
+	fmt.Fprintf(&b, "\x1b[%d;1H%s%s╰%s╯%s", s.rows, ansiClrEOL, ansiFaint, strings.Repeat("─", inner), ansiReset)
+	// Put the terminal cursor at the insertion point.
+	fmt.Fprintf(&b, "\x1b[%d;%dH%s", top+1+(curLine-vstart), 3+lw+(curCol-ws), ansiShow)
+	fmt.Fprint(os.Stdout, b.String())
 }
 
 // Resize re-measures and repaints; wrapped lines keep their old width, which
@@ -371,4 +409,25 @@ func inputWindow(n, cur, avail int) int {
 		ws = n - avail
 	}
 	return ws
+}
+
+// cursorLineCol maps a rune offset into a multi-line string to a line index
+// and rune column, clamping an out-of-range offset to the end.
+func cursorLineCol(text string, cursor int) (line, col int) {
+	r := []rune(text)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(r) {
+		cursor = len(r)
+	}
+	for i := 0; i < cursor; i++ {
+		if r[i] == '\n' {
+			line++
+			col = 0
+		} else {
+			col++
+		}
+	}
+	return line, col
 }

@@ -1,11 +1,11 @@
 # Claude Code parity
 
-Where roscoe stands against the tool people already know, as of v0.24.0
+Where roscoe stands against the tool people already know, as of v0.25.0
 (2026-08-31). Parity is a means, not the goal: roscoe should feel familiar
 enough that nobody has to relearn the basics, then do things Claude Code
 does not.
 
-**Everyday loop: ~77%. Whole surface: ~45%.**
+**Everyday loop: ~80%. Whole surface: ~47%.**
 
 Roscoe starts with an unfair advantage: a worker *is* Claude Code
 (`claude -p`), so every tool, permission mode, hook, skill, and CLAUDE.md
@@ -20,6 +20,7 @@ conversation, the controls, the session handling.
 | Pinned input box | yes | **yes** | bordered, bottom-anchored, resize-aware |
 | Prompt history | yes | **yes** | up and down walk previous prompts once the line is empty |
 | Line editing | yes | **yes** | left/right, home/end, word jumps, delete, and the readline kill keys; the same editor serves the during-turn box |
+| Multi-line input | yes | **yes** | bracketed paste keeps a pasted block whole; alt-enter or a trailing backslash adds a line; the box grows to fit |
 | Scrollback | yes | **yes** | arrows and page up/down move the viewport over the whole conversation |
 | Live output while working | yes | **partial** | one line per event; no token-by-token streaming |
 | Interrupt mid-turn | Esc | **Esc** | stops at a clean point, then you redirect |
@@ -38,7 +39,6 @@ The gaps you feel within a minute of typing:
 
 | | Status | Why it matters |
 |---|---|---|
-| Multi-line input | **no** | enter sends; no shift-enter or paste-safe entry |
 | Permission prompts | **no** | workers run pre-approved; there is no "allow this once?" |
 | Session picker | **no** | you need the session id; no `roscoe sessions` |
 | Streaming assistant text | **no** | the reply lands whole when the turn ends |
@@ -71,10 +71,9 @@ Deviation is the point in these:
 
 ## What to build next for parity that is felt
 
-1. **Multi-line input.** Paste a stack trace without sending it early.
-2. **Session picker** (`roscoe sessions`, `chat --last`).
-3. **Streaming assistant text**, so a long answer is not a silent wait.
-4. **MCP passthrough**, so existing servers work in workers.
+1. **Session picker** (`roscoe sessions`, `chat --last`).
+2. **Streaming assistant text**, so a long answer is not a silent wait.
+3. **MCP passthrough**, so existing servers work in workers.
 
 Permission prompts are deliberately further down: a fleet running at
 autonomy 90 is meant to keep going, and the quorum plus SMS escalation is

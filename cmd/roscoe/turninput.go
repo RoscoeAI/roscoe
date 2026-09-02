@@ -72,6 +72,7 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 
 	go func() {
 		defer close(done)
+		inPaste := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -84,6 +85,14 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 			case "eof":
 				t.mu.Unlock()
 				return
+			case "paste-start":
+				inPaste = true
+				t.mu.Unlock()
+				continue
+			case "paste-end":
+				inPaste = false
+				t.mu.Unlock()
+				continue
 			case "esc":
 				if !t.ed.Empty() { // esc clears a draft before it stops the turn
 					t.ed.Clear()
@@ -97,6 +106,12 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 				cancel()
 				return
 			case "enter":
+				if inPaste { // a pasted newline is content, not a send
+					t.ed.Newline()
+					t.mu.Unlock()
+					t.redraw(sc)
+					continue
+				}
 				line := strings.TrimSpace(t.ed.String())
 				t.ed.Clear()
 				if line != "" {

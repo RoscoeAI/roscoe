@@ -114,14 +114,34 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr, initial string, history []
 	}
 	redraw()
 
+	// Inside a bracketed paste every byte is content: newlines insert rather
+	// than submit, and tab is a tab rather than completion. The terminal
+	// brackets pastes because the screen asked it to (ESC[?2004h).
+	inPaste := false
 	for c := range k.events {
 		switch {
 		case c == '\r' || c == '\n':
+			if inPaste {
+				ed.Newline()
+				break
+			}
+			// A line ending in a backslash means "more coming": swap the
+			// backslash for a newline and keep going.
+			if line := ed.String(); strings.HasSuffix(line, "\\") {
+				ed.End()
+				ed.Backspace()
+				ed.Newline()
+				break
+			}
 			line := ed.String()
 			sc.SetPrompt(promptStr, "", "", "")
 			return line, true
 
 		case c == '\t':
+			if inPaste {
+				ed.applyEditKey("\t")
+				break
+			}
 			if done := comp.completeOn(ed.String()); done != "" {
 				ed.Set(done)
 			}
@@ -129,6 +149,12 @@ func (k *keyReader) ReadLineOn(sc *screen, promptStr, initial string, history []
 		case c == 0x1b:
 			key := k.escapeKey()
 			switch key {
+			case "paste-start":
+				inPaste = true
+				continue
+			case "paste-end":
+				inPaste = false
+				continue
 			case "esc":
 				return "", false
 			case "up":
@@ -334,6 +360,8 @@ func (k *keyReader) escapeKey() string {
 		return "esc"
 	}
 	switch intro {
+	case '\r', '\n':
+		return "alt-enter" // meta-enter: a newline that does not submit
 	case 'b':
 		return "word-left" // alt-b
 	case 'f':
@@ -381,6 +409,10 @@ func (k *keyReader) escapeKey() string {
 						return "end"
 					case "3":
 						return "delete"
+					case "200":
+						return "paste-start" // bracketed paste, enabled by the screen
+					case "201":
+						return "paste-end"
 					case "5":
 						return "pgup"
 					case "6":

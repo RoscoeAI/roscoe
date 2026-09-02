@@ -116,6 +116,12 @@ Up and down move, left and right step through a setting's values, enter types
 one in, esc closes. Every change is validated and written to `roscoe.json` as
 you make it.
 
+The prompt is a real line editor: arrows, home and end, word jumps, the
+readline kill keys. Paste a stack trace and it arrives whole, since the
+terminal brackets the paste and newlines inside it insert rather than send;
+alt-enter or a trailing backslash adds a line by hand, and the box grows to
+fit.
+
 A chat's transcript is kept from growing without bound. `--resume` trims a large
 session to its recent messages on import, and after every turn roscoe checks
 the size again and trims before the next one, so a long conversation costs what
