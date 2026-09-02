@@ -39,7 +39,7 @@ func TestRunManyReportsEveryTask(t *testing.T) {
 		return &streamjson.ResultEvent{Result: "answer to " + tk.Prompt, TotalCostUSD: 0.01}, nil
 	}
 	var out bytes.Buffer
-	code := runMany(context.Background(), &out, []string{"one", "two", "boom", "refused", "five"}, "task-x", 2, fake)
+	code := runMany(context.Background(), &out, []string{"one", "two", "boom", "refused", "five"}, "task-x", 2, "2 account(s): a, b · 1 each at once", fake)
 	text := out.String()
 	if code != 1 {
 		t.Errorf("exit %d with two failures", code)
@@ -48,7 +48,7 @@ func TestRunManyReportsEveryTask(t *testing.T) {
 		t.Errorf("%d ran at once, limit 2", maxSeen)
 	}
 	for _, want := range []string{
-		"[tasks] 5 prompts · 2 at a time",
+		"[tasks] 5 prompts · 2 at a time · 2 account(s): a, b · 1 each at once",
 		"task-x-1] started", "task-x-5] started",
 		"task-x-1] done · $0.0100 · answer to one",
 		"task-x-3] failed · worker exploded",
@@ -107,8 +107,14 @@ func TestAccountPoolSpreadsAndCaps(t *testing.T) {
 	r5()
 	r4()
 	_ = c4
+	if got := p.describe(); got != "2 account(s): a, b · 1 each at once" {
+		t.Errorf("describe = %q", got)
+	}
 	// No credentials: everything runs on claude's own login, unlimited.
 	none := newAccountPool(nil, 2)
+	if got := none.describe(); got != "claude's own login" {
+		t.Errorf("no-account describe = %q", got)
+	}
 	if none.slots() != 0 {
 		t.Errorf("no accounts should impose no limit, got %d", none.slots())
 	}

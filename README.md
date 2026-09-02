@@ -71,6 +71,16 @@ roscoe run "refactor the billing module"
 roscoe run "port the tests" "update the README" "bump deps"   # several at once, up to limits.max_parallel_tasks
 ```
 
+Several prompts run through one pool: at most `limits.max_parallel_tasks`
+at once, spread across every account that has a token with no account
+carrying more than `limits.per_account_max_concurrent`, and the first task
+starting alone so the others read the prompt prefix it wrote instead of
+paying to write their own. Each task gets its own worker and ledger; the
+run reports each start and finish, then the answers in order with the bill.
+
+```
+```
+
 Every setting is one path. `roscoe config` lists them most-changed first,
 `roscoe config show tiers.middle.effort` shows one with its value, its
 options, and what the choice costs, and `roscoe config set` changes it; in

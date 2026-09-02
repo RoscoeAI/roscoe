@@ -373,15 +373,8 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		creds, _ := accounts.ResolveAll(cfg, cfg.Tiers.Middle.Accounts, env, os.Getenv, accounts.MacKeychain{})
 		accts := newAccountPool(creds, cfg.Limits.PerAccountMaxConcurrent)
 		limit := pool.EffectiveLimit(cfg.Limits.MaxParallelTasks, accts.slots(), 1+len(more))
-		if len(creds) > 1 {
-			names := make([]string, len(creds))
-			for i, c := range creds {
-				names[i] = c.Name
-			}
-			fmt.Fprintf(os.Stderr, "[accounts] %d in play: %s · %d each at once\n", len(creds), strings.Join(names, ", "), cfg.Limits.PerAccountMaxConcurrent)
-		}
 		_ = account
-		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, workerTask(cfg, addr, accts, *dir))
+		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, accts.describe(), workerTask(cfg, addr, accts, *dir))
 	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 

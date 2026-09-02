@@ -37,14 +37,14 @@ func taskIDs(base string, n int) []string {
 // wrote instead of writing their own. Each task gets its own worker and its
 // own ledger. Streams are not interleaved; each task gets a start line, a
 // done line, and its answer printed under its id at the end.
-func runMany(ctx context.Context, out io.Writer, prompts []string, base string, limit int, run oneTask) int {
+func runMany(ctx context.Context, out io.Writer, prompts []string, base string, limit int, who string, run oneTask) int {
 	w := &lockedWriter{w: out} // tasks report from their own goroutines
 	ids := taskIDs(base, len(prompts))
 	tasks := make([]pool.Task, len(prompts))
 	for i, p := range prompts {
 		tasks[i] = pool.Task{ID: ids[i], Prompt: p}
 	}
-	fmt.Fprintf(w, "[tasks] %d prompts · %d at a time · the first warms the prompt cache for the rest\n", len(tasks), limit)
+	fmt.Fprintf(w, "[tasks] %d prompts · %d at a time · %s · the first warms the prompt cache for the rest\n", len(tasks), limit, who)
 	start := time.Now()
 	n := len(tasks)
 	results := pool.Run(ctx, tasks, pool.Options{Limit: limit}, func(ctx context.Context, t pool.Task, warm func()) (*streamjson.ResultEvent, error) {
@@ -168,6 +168,22 @@ func (p *accountPool) acquire(ctx context.Context) (accounts.Credential, func())
 		go func() { time.Sleep(50 * time.Millisecond); p.cond.Broadcast() }()
 		p.cond.Wait()
 	}
+}
+
+// describe says what the workers run under and how wide that lets them go,
+// for the run's header: the reason the parallelism is what it is.
+func (p *accountPool) describe() string {
+	if len(p.creds) == 0 {
+		return "claude's own login"
+	}
+	names := make([]string, len(p.creds))
+	for i, c := range p.creds {
+		names[i] = c.Name
+	}
+	if p.cap <= 0 {
+		return fmt.Sprintf("%d account(s): %s", len(p.creds), strings.Join(names, ", "))
+	}
+	return fmt.Sprintf("%d account(s): %s · %d each at once", len(p.creds), strings.Join(names, ", "), p.cap)
 }
 
 // slots is how many workers the accounts can carry at once; 0 means no
