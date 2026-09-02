@@ -98,7 +98,7 @@ func trimTranscript(r io.Reader) ([][]byte, bool, error) {
 // window.
 // importSession returns the session id to resume: the original when the
 // transcript is usable as-is, or a new id naming a trimmed copy.
-func importSession(srcPath, destConfigDir, sessionID string) (string, error) {
+func importSession(srcPath, destConfigDir, sessionID string, notify func(string)) (string, error) {
 	projectDir := filepath.Base(filepath.Dir(srcPath))
 	destDir := filepath.Join(destConfigDir, "projects", projectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -107,7 +107,7 @@ func importSession(srcPath, destConfigDir, sessionID string) (string, error) {
 	dest := filepath.Join(destDir, filepath.Base(srcPath))
 
 	if fi, err := os.Stat(srcPath); err == nil && fi.Size() > maxResumeBytes {
-		return trimIntoNewSession(srcPath, destDir, sessionID)
+		return trimIntoNewSession(srcPath, destDir, sessionID, notify)
 	}
 	if _, err := os.Stat(dest); err == nil {
 		return sessionID, nil // already imported (re-resume)
@@ -132,7 +132,7 @@ func importSession(srcPath, destConfigDir, sessionID string) (string, error) {
 // transcript under a fresh session id, leaving the original log untouched.
 // The ids inside each record are rewritten so claude reads a coherent
 // session.
-func trimIntoNewSession(srcPath, destDir, sessionID string) (string, error) {
+func trimIntoNewSession(srcPath, destDir, sessionID string, notify func(string)) (string, error) {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return "", fmt.Errorf("worker: open source transcript: %w", err)
@@ -172,8 +172,12 @@ func trimIntoNewSession(srcPath, destDir, sessionID string) (string, error) {
 	if err := out.Close(); err != nil {
 		return "", fmt.Errorf("worker: close trimmed transcript: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "roscoe: this conversation is too large to reload whole; resuming its recent %d messages (%dKB) as session %s\n",
-		len(lines), bytesWritten/1024, newID)
+	// A nil callback is a caller with nowhere to render, not a bug.
+	if notify == nil {
+		notify = func(string) {}
+	}
+	notify(fmt.Sprintf("this conversation is too large to reload whole; resuming its most recent %d messages (%dKB)",
+		len(lines), bytesWritten/1024))
 	return newID, nil
 }
 

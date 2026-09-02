@@ -47,6 +47,11 @@ type Opts struct {
 	CodexBin   string         // "" → "codex" from PATH (harness "codex")
 	Ledger     *ledger.Ledger // may be nil
 	OnEvent    func(*streamjson.Event)
+	// OnNotice reports something the operator should see, such as a
+	// transcript being trimmed to fit. A caller that owns the screen renders
+	// it there; writing to stderr underneath a full-screen TUI paints into
+	// the viewport and is wiped by the next repaint.
+	OnNotice func(string)
 }
 
 // orchestrationPrompt is appended to a worker's system prompt when
@@ -107,7 +112,13 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 		return nil, fmt.Errorf("worker: create config dir: %w", err)
 	}
 	if t.Resume != "" && t.ResumeFrom != "" {
-		resumeID, err := importSession(t.ResumeFrom, ccfgDir, t.Resume)
+		notify := o.OnNotice
+		if notify == nil {
+			// No renderer: stderr is still better than silence, and callers
+			// without a TUI have nowhere else to put it.
+			notify = func(m string) { fmt.Fprintln(os.Stderr, "roscoe: "+m) }
+		}
+		resumeID, err := importSession(t.ResumeFrom, ccfgDir, t.Resume, notify)
 		if err != nil {
 			return nil, err
 		}

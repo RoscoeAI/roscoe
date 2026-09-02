@@ -99,7 +99,7 @@ func TestImportSessionCopiesPreservingProjectDir(t *testing.T) {
 	const content = "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"
 	src := writeTranscript(t, srcCfg, "-Users-tim-code-app", sid, content)
 
-	if _, err := importSession(src, destCfg, "sess-1"); err != nil {
+	if _, err := importSession(src, destCfg, "sess-1", nil); err != nil {
 		t.Fatalf("importSession: %v", err)
 	}
 
@@ -127,14 +127,14 @@ func TestImportSessionIdempotent(t *testing.T) {
 	const sid = "ffff1111-aaaa-4bbb-8ccc-777788889999"
 	src := writeTranscript(t, srcCfg, "proj", sid, "original\n")
 
-	if _, err := importSession(src, destCfg, "sess-1"); err != nil {
+	if _, err := importSession(src, destCfg, "sess-1", nil); err != nil {
 		t.Fatalf("first importSession: %v", err)
 	}
 	// Change the source; a re-import must be a no-op, not an overwrite.
 	if err := os.WriteFile(src, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := importSession(src, destCfg, "sess-1"); err != nil {
+	if _, err := importSession(src, destCfg, "sess-1", nil); err != nil {
 		t.Fatalf("second importSession: %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestImportSessionMissingSource(t *testing.T) {
 	destCfg := t.TempDir()
 	src := filepath.Join(t.TempDir(), "projects", "proj", "nope.jsonl")
 
-	_, err := importSession(src, destCfg, "sess-1")
+	_, err := importSession(src, destCfg, "sess-1", nil)
 	if err == nil {
 		t.Fatal("importSession = nil error, want open failure")
 	}
@@ -187,7 +187,7 @@ func TestImportSessionTrimsOversizedTranscript(t *testing.T) {
 	}
 
 	destCfg := t.TempDir()
-	newID, err := importSession(src, destCfg, sessionID)
+	newID, err := importSession(src, destCfg, sessionID, nil)
 	if err != nil {
 		t.Fatalf("importSession: %v", err)
 	}
@@ -210,5 +210,55 @@ func TestImportSessionTrimsOversizedTranscript(t *testing.T) {
 	}
 	if _, err := os.Stat(src); err != nil {
 		t.Errorf("the original log must be left alone: %v", err)
+	}
+}
+
+// oversizedTranscript writes a transcript far past the resume cap and returns
+// its path plus a fresh destination config dir.
+func oversizedTranscript(t *testing.T) (src, destCfg string) {
+	t.Helper()
+	srcDir := filepath.Join(t.TempDir(), "projects", "-Users-tim-code-app")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const sessionID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	src = filepath.Join(srcDir, sessionID+".jsonl")
+	var b strings.Builder
+	blob := strings.Repeat("x", 50_000)
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&b, `{"type":"user","sessionId":%q,"n":%d,"text":%q}`+"\n", sessionID, i, blob)
+	}
+	if err := os.WriteFile(src, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return src, t.TempDir()
+}
+
+// The trim notice must reach whoever owns the screen. Writing it to stderr
+// under a full-screen TUI paints it into the viewport, where the next repaint
+// wipes it: the operator sees a message flash and vanish.
+func TestTrimNoticeGoesToTheCaller(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	src, destCfg := oversizedTranscript(t)
+	var got []string
+	if _, err := importSession(src, destCfg, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", func(m string) { got = append(got, m) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d notices, want 1: %v", len(got), got)
+	}
+	for _, want := range []string{"too large", "most recent"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("notice %q is missing %q", got[0], want)
+		}
+	}
+}
+
+// A caller with nowhere to render is not a bug, and must not crash the run.
+func TestNilNoticeIsSafe(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	src, destCfg := oversizedTranscript(t)
+	if _, err := importSession(src, destCfg, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", nil); err != nil {
+		t.Fatal(err)
 	}
 }

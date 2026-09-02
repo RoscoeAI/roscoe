@@ -324,16 +324,18 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 
 		res, runErr := worker.Run(turnCtx,
 			worker.Task{ID: *taskID, Prompt: msg, Dir: *dir, Account: account, Token: token, Resume: session, ResumeFrom: resumeFrom},
-			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led, OnEvent: func(ev *streamjson.Event) {
-				if ie, ok := ev.AsInit(); ok {
-					if ie.SessionID != "" {
-						session = ie.SessionID
+			worker.Opts{Cfg: cfg, RouterAddr: addr, Ledger: led,
+				OnNotice: func(m string) { sc.Printf("%s%s%s", ansiDim, m, ansiReset) },
+				OnEvent: func(ev *streamjson.Event) {
+					if ie, ok := ev.AsInit(); ok {
+						if ie.SessionID != "" {
+							session = ie.SessionID
+						}
+						// The harness just told us what the alias resolves to.
+						learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
 					}
-					// The harness just told us what the alias resolves to.
-					learnResolvedModel(cfg, cfg.Tiers.Middle.Provider, cfg.Tiers.Middle.Model, ie.Model)
-				}
-				narrateTo(sc, ev)
-			}},
+					narrateTo(sc, ev)
+				}},
 		)
 		cancelTurn()
 		acted := <-inputDone
