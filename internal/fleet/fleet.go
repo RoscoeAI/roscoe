@@ -33,9 +33,15 @@ type Copier func(ctx context.Context, host, localPath, remotePath string) error
 // a few seconds, not hang it.
 const probeTimeout = 15 * time.Second
 
+// userPath is prepended to PATH in every remote command. A non-interactive
+// ssh shell gets the system PATH only, and that is not where the claude and
+// roscoe installers put their binaries: the first live deploy installed roscoe
+// and then reported it missing, and called a node with claude "missing" too.
+const userPath = `export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; `
+
 // probeScript prints one key=value per line so the parser is trivial and a
 // partially failing probe still yields the fields that worked.
-const probeScript = `echo "host=$(hostname 2>/dev/null)"; ` +
+const probeScript = userPath + `echo "host=$(hostname 2>/dev/null)"; ` +
 	`echo "arch=$(uname -m 2>/dev/null)"; ` +
 	`echo "cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null)"; ` +
 	`echo "claude=$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -1 || echo missing)"; ` +
@@ -203,7 +209,7 @@ func Deploy(ctx context.Context, n config.Node, o DeployOpts, run Runner, copy C
 	}
 
 	// roscoe itself, pinned. ROSCOE_VERSION is honoured by install.sh.
-	inst := "curl -fsSL https://roscoe.sh/install | sh"
+	inst := "curl -fsSL https://roscoe.sh/install -o /tmp/roscoe-install.sh && sh /tmp/roscoe-install.sh"
 	if o.Version != "" {
 		inst = "ROSCOE_VERSION=" + shellQuote(o.Version) + " " + inst
 	}
@@ -238,9 +244,9 @@ func Deploy(ctx context.Context, n config.Node, o DeployOpts, run Runner, copy C
 	}
 
 	// Verify: the whole point of pinning is that this line matches everywhere.
-	out, err := run(dctx, n.SSH,
+	out, err := run(dctx, n.SSH, userPath+
 		`echo "roscoe=$(command -v roscoe >/dev/null 2>&1 && roscoe version 2>/dev/null || echo missing)"; `+
-			`echo "claude=$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -1 || echo missing)"`)
+		`echo "claude=$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -1 || echo missing)"`)
 	if err != nil {
 		r.Err = fmt.Errorf("verify: %w", err)
 		return r
@@ -256,6 +262,20 @@ func Deploy(ctx context.Context, n config.Node, o DeployOpts, run Runner, copy C
 		case "claude":
 			r.Claude = strings.TrimSpace(v)
 		}
+	}
+	// An installer that printed nothing wrong and left nothing behind is still
+	// a failed deploy; saying "ok" here is what let the first one lie.
+	if r.Roscoe == "" || r.Roscoe == "missing" {
+		r.Err = fmt.Errorf("verify: roscoe is not on the node's PATH after install")
+		return r
+	}
+	if o.Claude && (r.Claude == "" || r.Claude == "missing") {
+		r.Err = fmt.Errorf("verify: claude is not on the node's PATH after install")
+		return r
+	}
+	if o.Version != "" && !strings.Contains(r.Roscoe, o.Version) {
+		r.Err = fmt.Errorf("verify: asked for roscoe %s, node runs %s (does the installer honour ROSCOE_VERSION?)", o.Version, r.Roscoe)
+		return r
 	}
 	r.Steps = append(r.Steps, "verify")
 	return r

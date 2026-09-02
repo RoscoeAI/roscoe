@@ -21,6 +21,7 @@ type fakeFleet struct {
 	cmds    map[string][]string
 	copies  []string
 	failCmd string // a command substring that fails when run
+	verify  string // what the post-deploy verify reports; default is a healthy node
 }
 
 func (f *fakeFleet) run(ctx context.Context, host, cmd string) (string, error) {
@@ -44,6 +45,9 @@ func (f *fakeFleet) run(ctx context.Context, host, cmd string) (string, error) {
 		return "", errors.New("command failed")
 	}
 	if strings.Contains(cmd, `echo "roscoe=$(command -v roscoe`) && !strings.Contains(cmd, "host=") {
+		if f.verify != "" {
+			return f.verify, nil
+		}
 		return "roscoe=roscoe v0.28.0 (go1.26.7)\nclaude=2.1.251 (Claude Code)\n", nil
 	}
 	return f.answers[host], nil
@@ -150,8 +154,15 @@ func TestDeployPinsPushesAndVerifies(t *testing.T) {
 		t.Fatalf("deploy: %v (steps %v)", r.Err, r.Steps)
 	}
 	cmds := strings.Join(f.cmds["roscoe-ts"], "\n")
-	if !strings.Contains(cmds, "ROSCOE_VERSION='v0.28.0' curl -fsSL https://roscoe.sh/install | sh") {
-		t.Errorf("install not pinned:\n%s", cmds)
+	if !strings.Contains(cmds, "ROSCOE_VERSION='v0.28.0' curl -fsSL https://roscoe.sh/install -o /tmp/roscoe-install.sh && sh /tmp/roscoe-install.sh") {
+		t.Errorf("install not pinned, or a curl failure could hide behind sh's exit code:\n%s", cmds)
+	}
+	// Every remote command must see the user-level bin dirs, or an installed
+	// binary reads as missing (the first live deploy did exactly that).
+	for _, c := range f.cmds["roscoe-ts"] {
+		if strings.Contains(c, "command -v") && !strings.Contains(c, `PATH="$HOME/.local/bin:`) {
+			t.Errorf("remote command looks for binaries without the user PATH: %s", c)
+		}
 	}
 	if !strings.Contains(cmds, "claude.ai/install.sh") {
 		t.Error("claude install requested but not run")
@@ -205,6 +216,52 @@ func TestDeployStopsAtFirstFailure(t *testing.T) {
 	if len(f.copies) != 0 {
 		t.Error("config was pushed after an earlier step failed")
 	}
+}
+
+// The first live deploy installed roscoe, could not see it, and said ok.
+// Verify has to turn "left nothing behind" and "wrong version" into errors.
+func TestDeployVerifyRefusesToLie(t *testing.T) {
+	cases := map[string]struct{ verify, opts, wantErr string }{
+		"nothing installed":    {"roscoe=missing\nclaude=missing\n", "", "not on the node's PATH"},
+		"wrong version":        {"roscoe=roscoe v0.27.0 (go1.26.7)\nclaude=missing\n", "pin", "asked for roscoe v0.28.0"},
+		"claude asked, absent": {"roscoe=roscoe v0.28.0 (go1.26.7)\nclaude=missing\n", "claude", "claude is not on the node's PATH"},
+	}
+	for name, tc := range cases {
+		f := &fakeFleet{answers: map[string]string{}, verify: tc.verify}
+		o := DeployOpts{ConfigPath: "/l/c.json"}
+		if tc.opts == "pin" {
+			o.Version = "v0.28.0"
+		}
+		if tc.opts == "claude" {
+			o.Claude = true
+		}
+		r := Deploy(context.Background(), nodes()[0], o, f.run, f.copy)
+		if r.Err == nil || !strings.Contains(r.Err.Error(), tc.wantErr) {
+			t.Errorf("%s: err = %v, want %q", name, r.Err, tc.wantErr)
+		}
+		if contains(r.Steps, "verify") {
+			t.Errorf("%s: verify counted as a completed step", name)
+		}
+	}
+	// A claude that was not asked for is allowed to be missing.
+	f := &fakeFleet{answers: map[string]string{}, verify: "roscoe=roscoe v0.28.0 (go1.26.7)\nclaude=missing\n"}
+	if r := Deploy(context.Background(), nodes()[0], DeployOpts{Version: "v0.28.0"}, f.run, f.copy); r.Err != nil {
+		t.Errorf("missing claude failed a roscoe-only deploy: %v", r.Err)
+	}
+	// The probe looks in the same places, so a node the deploy could see is a
+	// node the table can see.
+	if !strings.HasPrefix(probeScript, userPath) {
+		t.Error("probe does not set the user PATH")
+	}
+}
+
+func contains(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEnabledAndQuoting(t *testing.T) {
