@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"roscoe.sh/roscoe/internal/calibrate"
 	"roscoe.sh/roscoe/internal/fleet"
 	"roscoe.sh/roscoe/internal/sessions"
 )
@@ -39,12 +40,20 @@ func cmdTop(ctx context.Context, explicit string, args []string) int {
 		if !*noFleet && len(cfg.Nodes) > 0 {
 			probes = fleet.ProbeAll(ctx, cfg.Nodes, fleet.SSH)
 		}
+		var calib *calibrate.Report
+		staleWhy := ""
+		if c, ok := calibrate.Load(calibrationPath(cfg)); ok {
+			calib = &c
+			staleWhy = calibrate.Stale(c, calibrate.Inspect())
+		}
 		out := renderTop(topData{
 			Now:      time.Now(),
 			Sessions: list,
 			Here:     runningHere(),
 			Probes:   probes,
 			Recent:   *recent,
+			Calib:    calib,
+			Stale:    staleWhy,
 		})
 		if *watch > 0 {
 			fmt.Print("\x1b[H\x1b[2J") // home, clear
@@ -69,6 +78,8 @@ type topData struct {
 	Here     int                // roscoe workers running on this machine
 	Probes   []fleet.Probe      // nil when the fleet was not probed
 	Recent   int
+	Calib    *calibrate.Report // nil when this machine was never calibrated
+	Stale    string            // why the calibration no longer fits, or ""
 }
 
 // spend is one period's totals.
@@ -142,6 +153,15 @@ func renderTop(d topData) string {
 		running += fmt.Sprintf(" · fleet %d/%d slots busy, %d node%s ready", busy, slots, ready, plural(ready))
 	}
 	fmt.Fprintf(&b, "  %-9s %s\n", "running", running)
+	// Whether the limits rest on a measurement of this machine.
+	switch {
+	case d.Calib == nil:
+		fmt.Fprintf(&b, "  %-9s not yet · roscoe calibrate measures this machine and sets the limits\n", "limits")
+	case d.Stale != "":
+		fmt.Fprintf(&b, "  %-9s calibrated %s for %d workers · stale: %s · roscoe calibrate\n", "limits", sessions.Age(d.Calib.At, d.Now), d.Calib.Recommend.MaxParallelTasks, d.Stale)
+	default:
+		fmt.Fprintf(&b, "  %-9s calibrated %s · %d workers, %d per account\n", "limits", sessions.Age(d.Calib.At, d.Now), d.Calib.Recommend.MaxParallelTasks, d.Calib.Recommend.PerAccountMaxConcurrent)
+	}
 	// The account's window, from the newest run that recorded one: what is
 	// left of the subscription before workers start being refused.
 	for _, s := range d.Sessions {

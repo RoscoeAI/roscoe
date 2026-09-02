@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"roscoe.sh/roscoe/internal/calibrate"
 	"roscoe.sh/roscoe/internal/sessions"
 )
 
@@ -72,8 +73,30 @@ func TestRenderTop(t *testing.T) {
 	if !strings.Contains(solo, "0 workers here") {
 		t.Errorf("zero workers not stated:\n%s", solo)
 	}
+	// Calibration state is one line: missing, stale, or current.
+	if !strings.Contains(solo, "limits    not yet") {
+		t.Errorf("uncalibrated machine not flagged:\n%s", solo)
+	}
+	cal := &calibrate.Report{At: topNow.Add(-2 * time.Hour), Recommend: calibrate.Limits{MaxParallelTasks: 7, PerAccountMaxConcurrent: 4}}
+	withCal := renderTop(topData{Now: topNow, Sessions: topSessions(), Recent: 1, Calib: cal})
+	if !strings.Contains(withCal, "limits    calibrated 2h ago · 7 workers, 4 per account") {
+		t.Errorf("calibrated line:\n%s", withCal)
+	}
+	stale := renderTop(topData{Now: topNow, Sessions: topSessions(), Recent: 1, Calib: cal, Stale: "claude was 2.1.259, now 2.2.0"})
+	if !strings.Contains(stale, "stale: claude was 2.1.259, now 2.2.0 · roscoe calibrate") {
+		t.Errorf("stale line:\n%s", stale)
+	}
 	empty := renderTop(topData{Now: topNow, Recent: 5})
 	if !strings.Contains(empty, "today     nothing") || !strings.Contains(empty, "no sessions yet") {
 		t.Errorf("empty render:\n%s", empty)
+	}
+}
+
+func TestUtilFromWindow(t *testing.T) {
+	if got := utilFromWindow("5h window 6% used, resets in 2h · 7d window 11% used"); got != 0.06 {
+		t.Errorf("util = %v", got)
+	}
+	if got := utilFromWindow("requests-remaining=3999"); got != -1 {
+		t.Errorf("api-key window should be unknown, got %v", got)
 	}
 }

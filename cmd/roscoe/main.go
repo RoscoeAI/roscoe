@@ -95,6 +95,8 @@ func realMain() int {
 		return cmdAccounts(ctx, *cfgPath, rest)
 	case "top":
 		return cmdTop(ctx, *cfgPath, rest)
+	case "calibrate":
+		return cmdCalibrate(ctx, *cfgPath, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "roscoe: unknown command %q\n\n", cmd)
 		usage()
@@ -138,6 +140,7 @@ commands:
   up [deploy flags]                       deploy to every enabled node, then show what is left to do
   accounts [set <name>]                   which Claude credentials the fleet has, and storing one
   top [--watch 10s] [--no-fleet]          the day at a glance: spend today and this week, what is running, recent sessions
+  calibrate [--spend] [--apply]           measure this machine and recommend the fleet's limits; --apply writes them
 
 --config defaults to ./roscoe.json, falling back to ~/.roscoe/roscoe.json.
 `)

@@ -227,6 +227,23 @@ Replies arrive over an outbound WebSocket and queue server-side while your
 laptop sleeps. Inspect with `roscoe relay status`, tail replies with
 `roscoe relay listen`.
 
+## Calibrate first
+
+```
+roscoe calibrate                 # measure this machine, recommend the limits, save the report
+roscoe calibrate --spend         # also run one warm worker and a burst, about ten cents
+roscoe calibrate --apply         # write the recommendation into roscoe.json
+```
+
+Before roscoe assumes how many workers a machine can carry, it measures:
+cores and memory, which harnesses are installed, how long a worker takes
+from start to its first request (with a refused local request, no tokens),
+and what the account's usage window says. With `--spend` it runs one warm
+worker for the cost of a start and then several at once to see whether the
+API pushes back. The report states each recommended limit with its reason,
+`roscoe top` shows when the machine was calibrated and flags a stale
+calibration when the hardware or the claude version has changed.
+
 ## The day at a glance
 
 ```
