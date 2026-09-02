@@ -70,7 +70,10 @@ roscoe smoke --full              # proves the whole path: a real claude -p
 roscoe run "refactor the billing module"
 ```
 
-Every config value is CLI-settable (`roscoe config set quorum.enabled true`);
+Every setting is one path. `roscoe config` lists them most-changed first,
+`roscoe config show tiers.middle.effort` shows one with its value, its
+options, and what the choice costs, and `roscoe config set` changes it; in
+chat, `/config` does the same and tab walks one level at a time. Every config value is CLI-settable (`roscoe config set quorum.enabled true`);
 precedence is flag > `ROSCOE_*` env > `roscoe.json` > defaults. See
 [`roscoe.example.json`](roscoe.example.json) for the full shape and
 [`SPEC.md`](SPEC.md) for the package contracts.

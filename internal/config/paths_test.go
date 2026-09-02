@@ -73,13 +73,13 @@ func TestDescribeEveryPath(t *testing.T) {
 
 func TestDescribeMatching(t *testing.T) {
 	cases := []struct{ path, want string }{
-		{"", "everything roscoe knows: accounts, providers, nodes, tiers, limits"},
-		{"autonomy.level", "0-100; at 100 only exhausted credits interrupt you"},
-		{"accounts.0.token_ref", "where the token lives: keychain:<service> or env:<VAR>"},           // index -> *
-		{"providers.deepinfra.base_url", "where requests go"},                                        // map key -> *
-		{"providers.local.serve.engine", "the local server: ollama, vllm, mlx"},                      // two wildcards
-		{"tiers.middle.allowed_tools.3", "tools workers may use"},                                    // list item takes its list
-		{"tiers.subagents.agents.scout.description", "when a worker should reach for this subagent"}, // named map entry
+		{"", "the settings, most-changed first"},
+		{"autonomy.level", "0 asks you about everything; 100 interrupts you only when credits run out"},
+		{"accounts.0.token_ref", "where the token lives: keychain:<service> or env:<VAR>"}, // index -> *
+		{"providers.deepinfra.base_url", "where requests go"},                              // map key -> *
+		{"providers.local.serve.engine", "the local server"},                               // two wildcards
+		{"tiers.middle.allowed_tools.3", "the tools a worker may use"},                     // list item takes its list
+		{"tiers.subagents.agents.scout.description", "when a worker should reach for it"},  // named map entry
 	}
 	for _, tc := range cases {
 		if got := Describe(tc.path); got != tc.want {

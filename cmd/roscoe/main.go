@@ -109,8 +109,8 @@ usage: roscoe [--config <path>] <command> [args]
 
 commands:
   init                                    write a default roscoe.json (refuses to overwrite)
-  config get <dotted.path>                print one config value
-  config set <dotted.path> <value>        change one config value and save
+  config [show <path> | get <path> | set <path> <value>]
+                                          the settings; show gives options and what a choice costs
   router [--bind B] [--port N]            run the model router in the foreground
   smoke [--full]                          run the environment smoke checks
   run "<prompt>" [--task-id X] [--dir D] [--resume <session-id>] [--node N]

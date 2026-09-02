@@ -43,13 +43,13 @@ func TestConfigCompletionWalksLevels(t *testing.T) {
 func TestConfigCompletionNotes(t *testing.T) {
 	comp := newChatCompleter(config.Default())
 	cases := []struct{ input, want string }{
-		{"/config accounts", "accounts: Claude credentials the fleet may use"},
-		{"/config autonomy.level", "autonomy.level: 0-100; at 100 only exhausted credits interrupt you"},
-		{"/config autonomy.lev", "autonomy.level: 0-100; at 100 only exhausted credits interrupt you"}, // unambiguous partial
-		{"/config autonomy.level 90", "autonomy.level: 0-100; at 100 only exhausted credits interrupt you"},
-		{"/config tiers.", "tiers: the three tiers: your session, the workers, the swarm"}, // mid-walk
-		{"/mod", "/model: the model your workers run"},
-		{"/harness", "/harness: which CLI the workers run: claude or codex"},
+		{"/config accounts", "accounts: the Claude credentials workers may run under"},
+		{"/config autonomy.level", "autonomy.level: 0 asks you about everything; 100 interrupts you only when credits run out"},
+		{"/config autonomy.lev", "autonomy.level: 0 asks you about everything; 100 interrupts you only when credits run out"}, // unambiguous partial
+		{"/config autonomy.level 90", "autonomy.level: 0 asks you about everything; 100 interrupts you only when credits run out"},
+		{"/config tiers.", "tiers: the three tiers of the fleet: your session, the workers that do the work, the swarm each worker fans out to"}, // mid-walk
+		{"/mod", "/model: the model your workers run; the main lever on cost per turn"},
+		{"/harness", "/harness: which CLI the workers are: claude or codex"},
 		{"hello", ""},
 	}
 	for _, tc := range cases {

@@ -197,19 +197,22 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			sc.Print(ansiDim + "started a fresh session" + ansiReset)
 			continue
 		case msg == "/help":
-			// Same text the prompt shows while you type, so the two cannot
-			// drift apart.
+			// Same one-liners the prompt shows while you type, grouped by
+			// what you are trying to do, so the two cannot drift apart.
 			width := 0
 			for _, c := range commands {
 				if n := len(c + commandArgs[c]); n > width {
 					width = n
 				}
 			}
-			for _, c := range commands {
-				sc.Printf("  %s%-*s%s  %s%s%s", ansiGreen, width, c+commandArgs[c], ansiReset,
-					ansiDim, commandHelp[c], ansiReset)
+			for _, g := range helpGroups {
+				sc.Printf("%s%s%s", ansiFaint, g.title, ansiReset)
+				for _, c := range g.cmds {
+					sc.Printf("  %s%-*s%s  %s%s%s", ansiGreen, width, c+commandArgs[c], ansiReset,
+						ansiDim, commandHelp[c], ansiReset)
+				}
 			}
-			sc.Printf("%sesc interrupts a running turn; up and down scroll%s", ansiFaint, ansiReset)
+			sc.Printf("%sesc interrupts a running turn · up and down scroll · tab completes%s", ansiFaint, ansiReset)
 			continue
 		case msg == "/settings":
 			runSettings(sc, keys, cfg, explicit)
@@ -221,7 +224,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case strings.HasPrefix(msg, "/model"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/model"))
 			if arg == "" {
-				sc.Printf("%smodel %s%s", ansiDim, cfg.Tiers.Middle.Model, ansiReset)
+				printLeaf(sc, cfg, "tiers.middle.model")
 				continue
 			}
 			cfg.Tiers.Middle.Model = arg
@@ -230,12 +233,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case strings.HasPrefix(msg, "/effort"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/effort"))
 			if arg == "" {
-				cur := cfg.Tiers.Middle.Effort
-				if cur == "" {
-					cur = "claude's default"
-				}
-				sc.Printf("%seffort %s · one of %s%s", ansiDim, cur,
-					strings.Join(config.EffortLevels(), ", "), ansiReset)
+				printLeaf(sc, cfg, "tiers.middle.effort")
 				continue
 			}
 			if !contains(config.EffortLevels(), arg) {
@@ -248,7 +246,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case strings.HasPrefix(msg, "/harness"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/harness"))
 			if arg == "" {
-				sc.Printf("%sharness %s%s", ansiDim, harnessLabel, ansiReset)
+				printLeaf(sc, cfg, "tiers.middle.harness")
 				continue
 			}
 			if arg != "claude" && arg != "codex" {
@@ -261,7 +259,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case strings.HasPrefix(msg, "/subagents"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/subagents"))
 			if arg == "" {
-				sc.Printf("%s%d subagents per worker%s", ansiDim, cfg.Tiers.Subagents.MaxConcurrent, ansiReset)
+				printLeaf(sc, cfg, "tiers.subagents.max_concurrent")
 				continue
 			}
 			n, convErr := strconv.Atoi(arg)
@@ -284,11 +282,8 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 					printConfigLevel(sc, cfg, parts[0])
 					continue
 				}
-				if v, gErr := cfg.Get(parts[0]); gErr == nil {
-					sc.Printf("%s%s = %v%s", ansiDim, parts[0], v, ansiReset)
-					if d := config.Describe(parts[0]); d != "" {
-						sc.Printf("%s%s%s", ansiFaint, d, ansiReset)
-					}
+				if _, gErr := cfg.Get(parts[0]); gErr == nil {
+					printLeaf(sc, cfg, parts[0])
 				} else {
 					sc.Printf("%s%v%s", ansiDim, gErr, ansiReset)
 				}
@@ -304,7 +299,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 		case strings.HasPrefix(msg, "/autonomy"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/autonomy"))
 			if arg == "" {
-				sc.Printf("%sautonomy %d · 100 means roscoe never interrupts you%s", ansiDim, cfg.Autonomy.Level, ansiReset)
+				printLeaf(sc, cfg, "autonomy.level")
 				continue
 			}
 			level, convErr := strconv.Atoi(arg)
@@ -526,20 +521,32 @@ func min3(a, b, c int) int {
 }
 
 // commandHelp is the one-line description shown above the input box while a
-// slash command is being typed.
+// slash command is being typed, and in /help. Each names what changes and,
+// where it matters, what it costs you.
 var commandHelp = map[string]string{
-	"/autonomy":  "0-100; how much roscoe decides without asking you",
-	"/config":    "read or set any setting by path; tab walks down a level",
+	"/model":     "the model your workers run; the main lever on cost per turn",
+	"/effort":    "how hard workers think; ultracode plans a workflow per task, lower is faster and cheaper",
+	"/harness":   "which CLI the workers are: claude or codex",
+	"/subagents": "how many cheap subagents one worker may run at once",
+	"/autonomy":  "0 to 100: how much roscoe decides without asking you",
+	"/settings":  "every tier's model and effort on one screen; arrows change them",
+	"/new":       "start a fresh session; this one stays on disk",
+	"/session":   "this session's id, for resuming later",
 	"/cost":      "what this chat has spent so far",
-	"/effort":    "worker reasoning; ultracode plans a workflow per task and fans out",
-	"/exit":      "leave the chat; the session keeps its id",
-	"/harness":   "which CLI the workers run: claude or codex",
-	"/help":      "the commands, with what each one does",
-	"/model":     "the model your workers run",
-	"/new":       "start a fresh session, leaving this one on disk",
-	"/session":   "the current session id, for resuming later",
-	"/settings":  "every tier's model and effort on one screen, arrows to change",
-	"/subagents": "how many cheap subagents a worker may run at once",
+	"/exit":      "leave; the session keeps its id",
+	"/config":    "any setting by path; alone it lists them, a path shows options and cost, a value sets it",
+	"/help":      "this list",
+}
+
+// helpGroups is /help's shape: what you are trying to do, then the commands.
+// Every command lives in exactly one group (a test holds that).
+var helpGroups = []struct {
+	title string
+	cmds  []string
+}{
+	{"change what runs", []string{"/model", "/effort", "/harness", "/subagents", "/autonomy", "/settings"}},
+	{"this conversation", []string{"/new", "/session", "/cost", "/exit"}},
+	{"anything, by path", []string{"/config", "/help"}},
 }
 
 func contains(items []string, want string) bool {
@@ -639,36 +646,62 @@ func newChatCompleter(cfg *config.Config) *completer {
 // (top-level keys when it is empty), each with its description and, for
 // leaves, its current value.
 func printConfigLevel(sc *screen, cfg *config.Config, prefix string) {
-	kids := cfg.ChildPaths(prefix)
-	if len(kids) == 0 {
+	rows := levelRows(cfg, prefix)
+	if len(rows) == 0 {
 		sc.Printf("%sno settings under %s%s", ansiDim, prefix, ansiReset)
 		return
 	}
 	if d := config.Describe(prefix); d != "" {
 		sc.Printf("%s%s%s", ansiFaint, d, ansiReset)
 	}
-	width := 0
-	for _, k := range kids {
-		if n := len(strings.TrimPrefix(k, prefix+".")); n > width {
-			width = n
+	width, vwidth := 0, 0
+	for _, r := range rows {
+		if len(r.Name) > width {
+			width = len(r.Name)
+		}
+		if n := len(r.Value); n > vwidth && n <= 24 {
+			vwidth = n
 		}
 	}
-	for _, k := range kids {
-		name := strings.TrimPrefix(k, prefix+".")
-		detail := config.Describe(k)
-		if len(cfg.ChildPaths(k)) == 0 {
-			if v, err := cfg.Get(k); err == nil {
-				detail = fmt.Sprintf("%v", v)
-				if d := config.Describe(k); d != "" {
-					detail = fmt.Sprintf("%v  %s%s", v, ansiFaint, d)
-				}
-			}
+	rareShown := false
+	for _, r := range rows {
+		if r.Rare && !rareShown {
+			sc.Printf("%sset up once%s", ansiFaint, ansiReset)
+			rareShown = true
 		}
-		sc.Printf("  %s%-*s%s  %s%s", ansiGreen, width, name, ansiReset, ansiDim+detail, ansiReset)
+		name := ansiGreen + fmt.Sprintf("%-*s", width, r.Name) + ansiReset
+		if r.Rare {
+			name = ansiDim + fmt.Sprintf("%-*s", width, r.Name) + ansiReset
+		}
+		if r.Branch {
+			sc.Printf("  %s  %s%s%s", name, ansiDim, r.What, ansiReset)
+			continue
+		}
+		sc.Printf("  %s  %s%-*s%s  %s%s%s", name, ansiDim, vwidth, r.Value, ansiReset, ansiFaint, r.What, ansiReset)
 	}
 	if prefix == "" {
-		sc.Printf("%s/config <key> to go deeper, /config <path> <value> to set%s", ansiFaint, ansiReset)
+		sc.Printf("%s/config <key> opens one · /config <path> <value> sets it · tab completes%s", ansiFaint, ansiReset)
+	} else {
+		sc.Printf("%s/config %s.<name> shows one with its options and what it costs%s", ansiFaint, prefix, ansiReset)
 	}
+}
+
+// printLeaf is the card for one setting: value, what it does, options, what
+// the choice means, and how to change it, with the one-word command when
+// there is one.
+func printLeaf(sc *screen, cfg *config.Config, path string) {
+	card := buildLeafCard(cfg, path, "/config", shortcutFor(path))
+	sc.Printf("%s%s%s = %s", ansiGreen, card.Path, ansiReset, card.Value)
+	if card.What != "" {
+		sc.Printf("  %s%s%s", ansiDim, card.What, ansiReset)
+	}
+	if card.Options != "" {
+		sc.Printf("  %soptions%s  %s", ansiFaint, ansiReset, card.Options)
+	}
+	if card.Means != "" {
+		sc.Printf("  %smeans%s    %s%s%s", ansiFaint, ansiReset, ansiDim, card.Means, ansiReset)
+	}
+	sc.Printf("  %sset it%s   %s%s%s", ansiFaint, ansiReset, ansiDim, card.SetIt, ansiReset)
 }
 
 // fleetLine states all three tiers in one line, so what is running is never

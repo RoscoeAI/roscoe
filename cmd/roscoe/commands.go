@@ -56,13 +56,10 @@ func cmdInit(explicit string) int {
 }
 
 func cmdConfig(explicit string, args []string) int {
-	const use = "usage: roscoe config get <dotted.path> | roscoe config set <dotted.path> <value>"
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, use)
-		return 2
-	}
-	sub, rest := args[0], args[1:]
-
+	const use = "usage: roscoe config                       list the settings\n" +
+		"       roscoe config show <path>           one setting: value, options, what it costs\n" +
+		"       roscoe config get <path>            the bare value, for scripts\n" +
+		"       roscoe config set <path> <value>"
 	path, err := resolveConfigPath(explicit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "roscoe config: %v\n", err)
@@ -73,8 +70,35 @@ func cmdConfig(explicit string, args []string) int {
 		fmt.Fprintf(os.Stderr, "roscoe config: load %s: %v\n", path, err)
 		return 1
 	}
+	if len(args) < 1 {
+		for _, l := range levelLines(cfg, "") {
+			fmt.Println(l)
+		}
+		fmt.Println("\nroscoe config show <path> opens one; roscoe config set <path> <value> changes it")
+		return 0
+	}
+	sub, rest := args[0], args[1:]
 
 	switch sub {
+	case "show":
+		if len(rest) != 1 {
+			fmt.Fprintln(os.Stderr, use)
+			return 2
+		}
+		if len(cfg.ChildPaths(rest[0])) > 0 {
+			for _, l := range levelLines(cfg, rest[0]) {
+				fmt.Println(l)
+			}
+			return 0
+		}
+		if _, err := cfg.Get(rest[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "roscoe config show: %v\n", err)
+			return 1
+		}
+		for _, l := range buildLeafCard(cfg, rest[0], "roscoe config set", "").lines() {
+			fmt.Println(l)
+		}
+		return 0
 	case "get":
 		if len(rest) != 1 {
 			fmt.Fprintln(os.Stderr, use)
