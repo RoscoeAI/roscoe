@@ -50,6 +50,7 @@ type world struct {
 	claudeLog  string
 	claudeMode string
 	warmDelay  string // seconds the fake waits before its first assistant event
+	resultFile string // when set, the fake's result text is this file's content
 	cfgPath    string
 }
 
@@ -75,7 +76,8 @@ func newWorld(t *testing.T) *world {
 # speaks stream-json the way claude -p --output-format stream-json does: an
 # init, one assistant turn, a result with usage. FAKE_CLAUDE_MODE=fail makes
 # it die the way a refused request does.
-echo "$@" >> "$FAKE_CLAUDE_LOG"
+# One line per start, however many lines the prompt has.
+printf '%s ' "$@" | tr '\n' ' ' >> "$FAKE_CLAUDE_LOG"; echo >> "$FAKE_CLAUDE_LOG"
 case "$1" in
   --version) echo "2.1.259 (Claude Code)"; exit 0;;
 esac
@@ -100,12 +102,20 @@ if [ "$FAKE_CLAUDE_MODE" = "toolong" ] && [ -n "$resumed" ] && [ ! -f "$FAKE_CLA
   printf '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Prompt is too long","session_id":"%s","total_cost_usd":0,"num_turns":0}\n' "$sid"
   exit 0
 fi
-echo "start $prompt" >> "$FAKE_CLAUDE_EVENTS"
+# JSON-safe echo of the prompt: first line, no quotes or backslashes.
+short=$(printf '%s' "$prompt" | head -n1 | tr -d '"\\')
+answer="fake answer to: $short"
+# FAKE_CLAUDE_RESULT_FILE: the result text comes from this file, one JSON
+# string (newlines escaped), so a test can hand the worker a loop block.
+if [ -n "$FAKE_CLAUDE_RESULT_FILE" ] && [ -f "$FAKE_CLAUDE_RESULT_FILE" ]; then
+  answer=$(tr -d '"\\' < "$FAKE_CLAUDE_RESULT_FILE" | awk '{printf "%s\\n", $0}')
+fi
+echo "start $short" >> "$FAKE_CLAUDE_EVENTS"
 printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools":["Read","Bash"]}\n' "$sid" "$model"
 [ -n "$FAKE_CLAUDE_WARM_DELAY" ] && sleep "$FAKE_CLAUDE_WARM_DELAY"
-echo "assistant $prompt" >> "$FAKE_CLAUDE_EVENTS"
-printf '{"type":"assistant","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"fake answer to: %s"}],"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30}},"session_id":"%s"}\n' "$model" "$prompt" "$sid"
-printf '{"type":"result","subtype":"success","is_error":false,"result":"fake answer to: %s","session_id":"%s","total_cost_usd":0.0123,"num_turns":1,"duration_ms":420,"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30},"modelUsage":{"%s":{"inputTokens":1200,"outputTokens":30,"cacheReadInputTokens":40000,"cacheCreationInputTokens":0,"costUSD":0.0123,"contextWindow":200000}}}\n' "$prompt" "$sid" "$model"
+echo "assistant $short" >> "$FAKE_CLAUDE_EVENTS"
+printf '{"type":"assistant","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"%s"}],"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30}},"session_id":"%s"}\n' "$model" "$answer" "$sid"
+printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","session_id":"%s","total_cost_usd":0.0123,"num_turns":1,"duration_ms":420,"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30},"modelUsage":{"%s":{"inputTokens":1200,"outputTokens":30,"cacheReadInputTokens":40000,"cacheCreationInputTokens":0,"costUSD":0.0123,"contextWindow":200000}}}\n' "$answer" "$sid" "$model"
 exit 0
 `)
 	w.fake("ssh", `#!/bin/sh
@@ -191,6 +201,7 @@ func (w *world) run(stdin string, args ...string) result {
 		"FAKE_CLAUDE_MODE=" + w.claudeMode,
 		"FAKE_CLAUDE_EVENTS=" + w.claudeLog + ".events",
 		"FAKE_CLAUDE_WARM_DELAY=" + w.warmDelay,
+		"FAKE_CLAUDE_RESULT_FILE=" + w.resultFile,
 		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
 		"TERM=dumb",
 		"NO_COLOR=1",
@@ -504,7 +515,7 @@ func readFile(p string) string {
 func (w *world) claudeStarts() []string {
 	var out []string
 	for _, l := range strings.Split(readFile(w.claudeLog), "\n") {
-		if l != "" && l != "--version" {
+		if l != "" && strings.TrimSpace(l) != "--version" {
 			out = append(out, l)
 		}
 	}
@@ -755,5 +766,102 @@ func TestE2ERunResumeRetriesWhenPromptIsTooLong(t *testing.T) {
 	}
 	if strings.Contains(r.stdout, "Prompt is too long") {
 		t.Errorf("the refusal leaked into the answer:\n%s", r.stdout)
+	}
+}
+
+// TestE2ELoopOnce: one iteration, the worker's loop block folded into
+// loop.md by the supervisor, and the summary an operator reads.
+func TestE2ELoopOnce(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.resultFile = filepath.Join(w.home, "result.txt")
+	os.WriteFile(w.resultFile, []byte(`Tidied the thing.
+
+`+"```loop"+`
+STATUS: done
+PLAN:
+- [x] tidy the thing
+TRIED:
+- tidied it; nothing failed
+NOTES:
+- the thing lives in things/
+`+"```\n"), 0o600)
+
+	r := w.run("", "loop", "Tidy the thing", "--once")
+	expect(t, r, 0, "[loop] ", "[iteration 1]", "[iteration 1] done · done · 0.0123 USD · --once",
+		"[loop] done after 1 iterations · 0.0123 USD", "[loop] working memory: ", "roscoe run --resume ")
+	md := readFile(filepath.Join(w.cwd, "loop.md"))
+	if !strings.HasPrefix(md, "# Tidy the thing\n") {
+		t.Errorf("loop.md was not seeded with the charter:\n%s", md)
+	}
+	for _, want := range []string{"## Status\ndone", "- [x] tidy the thing", "- tidied it; nothing failed", "- the thing lives in things/"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("loop.md lacks %q after the tail was applied:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "_nothing yet_") {
+		t.Errorf("the seed placeholder survived a Tried entry:\n%s", md)
+	}
+	starts := w.claudeStarts()
+	if len(starts) != 1 {
+		t.Fatalf("%d worker starts for --once", len(starts))
+	}
+	for _, want := range []string{"Charter: Tidy the thing", "Do not edit loop.md yourself", "STATUS: continuing | done | blocked"} {
+		if !strings.Contains(starts[0], want) {
+			t.Errorf("the kernel prompt lacks %q", want)
+		}
+	}
+	// A loop.md that already says done is not worked again.
+	r = w.run("", "loop", "Tidy the thing", "--once")
+	expect(t, r, 0, "loop.md already reports done")
+	if len(w.claudeStarts()) != 1 {
+		t.Error("a finished loop dispatched a worker")
+	}
+}
+
+// Without a loop block the status stays continuing; the run resumes the same
+// session each iteration and stops at the ceiling with exit 3.
+func TestE2ELoopCeilingAndResume(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.run("", "loop", "Keep going", "--max-iterations", "2", "--no-quorum")
+	expect(t, r, 3, "[judge] the worker's own status line", "[iteration 1] continuing · continue",
+		"[iteration 2] continuing", "hit the 2 iteration ceiling still continuing", "0.0246 USD")
+	starts := w.claudeStarts()
+	if len(starts) != 2 {
+		t.Fatalf("%d worker starts, want 2", len(starts))
+	}
+	if strings.Contains(starts[0], "--resume") || !strings.Contains(starts[1], "--resume ") {
+		t.Errorf("the second iteration should resume the first's session:\n%s\n%s", starts[0], starts[1])
+	}
+	if !strings.Contains(starts[1], "--- MEMORY (loop.md) ---") {
+		t.Error("the second iteration's prompt does not carry loop.md")
+	}
+}
+
+func TestE2ELoopBudgetStops(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.run("", "loop", "Spend little", "--budget", "0.02", "--max-iterations", "9", "--no-quorum")
+	expect(t, r, 3, "spent 0.02 of a 0.02 budget", "escalate after 2 iterations")
+	if n := len(w.claudeStarts()); n != 2 {
+		t.Errorf("%d worker starts; a $0.02 budget at $0.0123 a turn allows 2", n)
+	}
+}
+
+// A worker that keeps dying stops the run before it can spend a budget
+// discovering that, and says how many times it failed.
+func TestE2ELoopStopsAfterRepeatedFailures(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.claudeMode = "fail"
+	r := w.run("", "loop", "Doomed", "--max-iterations", "9", "--no-quorum")
+	expect(t, r, 1, "3 iterations in a row failed", "claude failed without result")
+	if n := len(w.claudeStarts()); n != 3 {
+		t.Errorf("%d worker starts, want 3 then stop", n)
+	}
+	md := readFile(filepath.Join(w.cwd, "loop.md"))
+	if !strings.Contains(md, "## Status\ncontinuing") {
+		t.Errorf("loop.md after failures:\n%s", md)
 	}
 }
