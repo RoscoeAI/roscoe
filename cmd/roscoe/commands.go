@@ -287,11 +287,20 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	}
 
 	// Flags may follow the prompt, and further quoted arguments are further
-	// prompts: roscoe run "a" "b" "c" runs the three at once.
+	// prompts: roscoe run "a" "b" "c" runs the three at once. Prompts and
+	// flags interleave freely, so parse until nothing is left; stopping at
+	// the second prompt once turned "--node x" into two paid tasks.
 	var more []string
 	if len(rest) > 1 {
-		_ = fl.Parse(rest[1:])
-		more = fl.Args()
+		more, rest = nil, rest[1:]
+		for len(rest) > 0 {
+			_ = fl.Parse(rest)
+			rest = fl.Args()
+			if len(rest) > 0 {
+				more = append(more, rest[0])
+				rest = rest[1:]
+			}
+		}
 	}
 	if len(more) > 0 && (*resume != "" || *node != "") {
 		fmt.Fprintln(os.Stderr, "roscoe run: several prompts run here, fresh; --resume and --node take one prompt")

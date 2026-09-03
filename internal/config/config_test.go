@@ -828,3 +828,22 @@ func TestDefaultNamesNoRemoteHosts(t *testing.T) {
 		}
 	}
 }
+
+// A miss deep in a path must name the whole path typed and what exists at
+// the level that missed, not just the first segment that failed.
+func TestGetMissNamesThePathAndTheSiblings(t *testing.T) {
+	c := Default()
+	_, err := c.Get("no.such.path")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for _, want := range []string{`"no"`, `"no.such.path"`, "the top level has:", "tiers", "autonomy"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	_, err = c.Get("tiers.middle.nope")
+	if err == nil || !strings.Contains(err.Error(), "tiers.middle has:") || !strings.Contains(err.Error(), "model") {
+		t.Errorf("error %v should list tiers.middle's keys", err)
+	}
+}

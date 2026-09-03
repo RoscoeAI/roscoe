@@ -52,20 +52,43 @@ func (MacKeychain) Get(service string) (string, error) {
 }
 
 // SetArgs is the command that stores a token under service by prompting for
-// it on the terminal: with no -w, security asks for the value itself, with
-// echo off, so roscoe never sees it. -U updates an existing item.
+// it on the terminal. The prompt only happens when -w is the LAST argument
+// with no value (the man page's "put at end of command to be prompted");
+// leave -w out and security stores an empty password without a word, which
+// is exactly what happened once. -U updates an existing item.
 func SetArgs(service string) []string {
-	return []string{"add-generic-password", "-U", "-s", service, "-a", keychainAccount, "-l", "roscoe: " + service}
+	return []string{"add-generic-password", "-U", "-s", service, "-a", keychainAccount, "-l", "roscoe: " + service, "-w"}
 }
 
-// Set stores a token interactively via SetArgs.
+// ErrEmpty is Set finding nothing behind the item it just wrote: the paste
+// did not land (an empty line at the prompt, or a terminal that swallowed
+// it), so the item is removed rather than left looking like a token.
+var ErrEmpty = errors.New("nothing was stored; run the command again and paste the token at the prompt")
+
+// Set stores a token interactively via SetArgs, then proves something is
+// there. The check reads the secret to memory and compares its length only.
 func (MacKeychain) Set(service string) error {
 	cmd := exec.Command("security", SetArgs(service)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("security add-generic-password: %w", err)
 	}
+	got, err := MacKeychain{}.Get(service)
+	if err != nil {
+		return fmt.Errorf("stored, but reading it back failed: %w", err)
+	}
+	if got == "" {
+		_ = MacKeychain{}.Delete(service)
+		return ErrEmpty
+	}
 	return nil
+}
+
+// Delete removes the item, so an empty write does not masquerade as a token.
+func (MacKeychain) Delete(service string) error {
+	cmd := exec.Command("security", "delete-generic-password", "-s", service, "-a", keychainAccount)
+	cmd.Stdout, cmd.Stderr = nil, nil
+	return cmd.Run()
 }
 
 // classify turns the security tool's exit into (present, error). 44 is

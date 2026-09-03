@@ -14,3 +14,7 @@ func (MacKeychain) Has(string) (bool, error)   { return false, ErrLocked }
 func (MacKeychain) Get(string) (string, error) { return "", ErrLocked }
 func (MacKeychain) Set(string) error           { return ErrLocked }
 func SetArgs(service string) []string          { return nil }
+
+var ErrEmpty = errors.New("nothing was stored")
+
+func (MacKeychain) Delete(string) error { return ErrLocked }

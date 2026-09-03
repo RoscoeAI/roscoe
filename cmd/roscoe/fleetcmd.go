@@ -73,6 +73,10 @@ func nodesTable(probes []fleet.Probe) string {
 		switch {
 		case !n.Enabled:
 			fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %-8s %sdisabled%s\n", n.Name, orDash(n.SSH), "-", "-", "-", "-", ansiFaint, ansiReset)
+		case n.SSH == "":
+			// This machine. It is never probed over ssh, so "unreachable"
+			// would be a lie; run and chat use it directly.
+			fmt.Fprintf(&b, "  %-12s %-16s %-9s %-20s %-12s %-8d %shere (roscoe run uses it directly)%s\n", n.Name, "-", "-", "-", "-", n.Workers, ansiDim, ansiReset)
 		case !p.Reachable:
 			why := "unreachable"
 			if p.Err != nil {

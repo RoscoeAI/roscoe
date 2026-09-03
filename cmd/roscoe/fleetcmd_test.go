@@ -156,3 +156,15 @@ func TestShortVersionAndPin(t *testing.T) {
 		}
 	}
 }
+
+// The default config's only node is this machine, with no ssh alias. It is
+// never probed, so the table must not call it unreachable.
+func TestNodesTableLocalRow(t *testing.T) {
+	out := nodesTable([]fleet.Probe{{Node: config.Node{Name: "local", Enabled: true, Workers: 2}}})
+	if strings.Contains(out, "unreachable") {
+		t.Errorf("the local node reads as unreachable:\n%s", out)
+	}
+	if !strings.Contains(out, "here") || !strings.Contains(out, "roscoe run") {
+		t.Errorf("the local row should say it is this machine and how it is used:\n%s", out)
+	}
+}

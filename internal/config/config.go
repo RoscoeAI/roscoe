@@ -311,7 +311,7 @@ func (c *Config) Get(dotted string) (any, error) {
 	var cur any = m
 	segs := strings.Split(dotted, ".")
 	for i, seg := range segs {
-		cur, err = step(cur, seg, strings.Join(segs[:i+1], "."))
+		cur, err = step(cur, seg, strings.Join(segs[:i+1], "."), dotted)
 		if err != nil {
 			return nil, err
 		}
@@ -342,7 +342,7 @@ func (c *Config) SetPath(dotted string, raw string) error {
 	segs := strings.Split(dotted, ".")
 	var cur any = m
 	for i, seg := range segs[:len(segs)-1] {
-		cur, err = step(cur, seg, strings.Join(segs[:i+1], "."))
+		cur, err = step(cur, seg, strings.Join(segs[:i+1], "."), dotted)
 		if err != nil {
 			return err
 		}
@@ -438,13 +438,28 @@ func (c *Config) toMap() (map[string]any, error) {
 }
 
 // step resolves one dotted-path segment against a generic JSON container.
-// sofar is the path up to and including seg, used in error messages.
-func step(cur any, seg, sofar string) (any, error) {
+// sofar is the path up to and including seg; full is the whole path as the
+// operator typed it. A miss names both and lists what is really there, so a
+// typo in the third segment is not reported as a mystery about the first.
+func step(cur any, seg, sofar, full string) (any, error) {
 	switch v := cur.(type) {
 	case map[string]any:
 		val, ok := v[seg]
 		if !ok {
-			return nil, fmt.Errorf("no such key %q", sofar)
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			where := "the top level"
+			if i := strings.LastIndex(sofar, "."); i >= 0 {
+				where = sofar[:i]
+			}
+			msg := fmt.Sprintf("no such key %q", sofar)
+			if full != sofar {
+				msg += fmt.Sprintf(" in %q", full)
+			}
+			return nil, fmt.Errorf("%s; %s has: %s", msg, where, strings.Join(keys, ", "))
 		}
 		return val, nil
 	case []any:
