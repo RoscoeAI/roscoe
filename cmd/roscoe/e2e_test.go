@@ -135,7 +135,9 @@ printf '{"type":"user","sessionId":"%s","message":{"role":"user","content":"%s"}
 printf '{"type":"assistant","sessionId":"%s","message":{"role":"assistant","content":[{"type":"text","text":"fake answer to: %s"}]}}\n' "$sid" "$short" >> "$tdir/$sid.jsonl"
 echo "start $short" >> "$FAKE_CLAUDE_EVENTS"
 printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools":["Read","Bash"]}\n' "$sid" "$model"
-[ -n "$FAKE_CLAUDE_WARM_DELAY" ] && sleep "$FAKE_CLAUDE_WARM_DELAY"
+# Interruptible: an interrupted worker must die promptly, as claude does.
+trap 'exit 130' INT TERM
+if [ -n "$FAKE_CLAUDE_WARM_DELAY" ]; then sleep "$FAKE_CLAUDE_WARM_DELAY" & wait $!; fi
 echo "assistant $short" >> "$FAKE_CLAUDE_EVENTS"
 printf '{"type":"assistant","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"%s"}],"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30}},"session_id":"%s"}\n' "$model" "$answer" "$sid"
 printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","session_id":"%s","total_cost_usd":0.0123,"num_turns":1,"duration_ms":420,"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30},"modelUsage":{"%s":{"inputTokens":1200,"outputTokens":30,"cacheReadInputTokens":40000,"cacheCreationInputTokens":0,"costUSD":0.0123,"contextWindow":200000}}}\n' "$answer" "$sid" "$model"
@@ -1175,4 +1177,74 @@ func TestE2EChatSettingsPanel(t *testing.T) {
 	// Tier 1's effort defaults to ultracode, the end of the list; one step
 	// left is max, shown on the row and saved to the file.
 	expect(t, w.run("", "config", "get", "tiers.main.effort"), 0, "max")
+}
+
+// Esc during a run stops the worker at a clean point and offers a redirect
+// line; the redirect resumes the same session with the new instruction.
+func TestE2ERunEscRedirect(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.warmDelay = "2"
+	r := w.runPTY([]ptyStep{
+		{expect: "[keys] esc interrupts the task"},
+		{expect: "[init] model=", send: "\x1b"},
+		{expect: "redirect> ", send: "do this instead\r"},
+		{expect: "[redirect] resuming session"},
+		{expect: "[done] cost=", send: ""},
+	}, "run", "slow one")
+	expect(t, r, 0, "[esc] interrupting", "fake answer to: do this instead")
+	starts := w.claudeStarts()
+	if len(starts) != 2 {
+		t.Fatalf("%d worker starts, want the interrupted one and the redirect:\n%s", len(starts), strings.Join(starts, "\n"))
+	}
+	sid := regexp.MustCompile(`--session-id (\S+)`).FindStringSubmatch(starts[0])
+	if sid == nil || !strings.Contains(starts[1], "-p do this instead ") || !strings.Contains(starts[1], "--resume "+sid[1]) {
+		t.Errorf("the redirect should resume the first session with the new prompt:\n%s\n%s", starts[0], starts[1])
+	}
+
+	// Esc then an empty line: stopped, and told how to pick it back up.
+	r = w.runPTY([]ptyStep{
+		{expect: "[init] model=", send: "\x1b"},
+		{expect: "redirect> ", send: "\r"},
+		{expect: "Pick it back up any time: roscoe run --resume "},
+	}, "run", "slow two")
+	if n := len(w.claudeStarts()); n != 3 {
+		t.Errorf("%d starts; an empty redirect must not start a worker", n)
+	}
+}
+
+// chat --last resumes the newest session; --pick offers a numbered list
+// and reads a number before the screen takes over.
+func TestE2EChatLastAndPick(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{{expect: "no session to resume yet"}}, "chat", "--last")
+	if r.code == 0 && runtime.GOOS == "linux" {
+		t.Error("exit 0 with nothing to resume")
+	}
+	expect(t, w.run("", "run", "first question"), 0)
+
+	r = w.runPTY([]ptyStep{
+		{expect: "picking up here", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat", "--last")
+	expect(t, r, 0, "[resume] latest: ", "first question", "─ earlier in this conversation ─")
+
+	r = w.runPTY([]ptyStep{
+		{expect: "resume which? (number", send: "1\r"},
+		{expect: "picking up here", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat", "--pick")
+	expect(t, r, 0, "first question")
+
+	r = w.runPTY([]ptyStep{
+		{expect: "resume which? (number", send: "9\r"},
+		{expect: "not a listed number"},
+	}, "chat", "--pick")
+	if strings.Contains(r.stdout, "picking up here") {
+		t.Error("a number off the list still resumed something")
+	}
+	if n := len(w.claudeStarts()); n != 1 {
+		t.Errorf("%d worker starts; resuming and exiting should start none", n)
+	}
 }
