@@ -283,7 +283,7 @@ func TestE2EBareRoscoeOpensChat(t *testing.T) {
 		{expect: "› ", send: "/exit\r"},
 		{expect: "bye"},
 	})
-	expect(t, r, 0, "roscoe chat: bye")
+	expect(t, r, 0)
 	if strings.Contains(r.stdout, "commands:") {
 		t.Error("bare roscoe printed usage at a terminal")
 	}
@@ -297,7 +297,7 @@ func TestE2ERunPromptCtrlC(t *testing.T) {
 	if len(w.claudeStarts()) != 0 {
 		t.Error("ctrl-c at the prompt started a worker")
 	}
-	if r.code == 0 && runtime.GOOS == "linux" { // script -e forwards the status
+	if r.code == 0 { // script(1) forwards the status on both platforms
 		t.Errorf("exit 0 after ctrl-c:\n%s", r.stdout)
 	}
 }
@@ -1026,10 +1026,18 @@ func (w *world) runPTY(steps []ptyStep, args ...string) result {
 			return false
 		}
 	}
-	for _, st := range steps {
+	for i, st := range steps {
 		deadline := time.Now().Add(10 * time.Second)
+		last := i == len(steps)-1
 		for !strings.Contains(screen(), st.expect) {
 			if exited() {
+				// Linux's script(1) can drop what a program prints in the
+				// instant before it exits, so a final line is not proof and
+				// its absence is not failure: the exit code is, and the
+				// caller checks it.
+				if last && st.send == "" {
+					break
+				}
 				w.t.Fatalf("exited before %q appeared on the terminal; saw:\n%s", st.expect, screen())
 			}
 			if time.Now().After(deadline) {
@@ -1128,7 +1136,7 @@ func TestE2EChatSession(t *testing.T) {
 		{expect: "USD across 1 turns", send: "/exit\r"},
 		{expect: "bye"},
 	}, "chat")
-	expect(t, r, 0, "roscoe chat: bye", "fake answer to: hello there", "0.0123 USD across 1 turns")
+	expect(t, r, 0, "fake answer to: hello there", "0.0123 USD across 1 turns")
 	starts := w.claudeStarts()
 	if len(starts) != 1 || !strings.Contains(starts[0], "-p hello there ") {
 		t.Errorf("chat dispatched %d workers:\n%s", len(starts), strings.Join(starts, "\n"))
@@ -1228,7 +1236,7 @@ func TestE2EChatLastAndPick(t *testing.T) {
 	w := newWorld(t)
 	w.init()
 	r := w.runPTY([]ptyStep{{expect: "no session to resume yet"}}, "chat", "--last")
-	if r.code == 0 && runtime.GOOS == "linux" {
+	if r.code == 0 {
 		t.Error("exit 0 with nothing to resume")
 	}
 	expect(t, w.run("", "run", "first question"), 0)
