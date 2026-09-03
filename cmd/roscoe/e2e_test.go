@@ -284,7 +284,18 @@ func TestE2EAccounts(t *testing.T) {
 	w.init()
 
 	r := w.run("", "accounts")
-	expect(t, r, 0, "primary", "secondary", "api-fallback (off)", "roscoe accounts set primary")
+	expect(t, r, 0, "primary", "secondary", "api-fallback (off)")
+	if runtime.GOOS != "darwin" {
+		// No keychain here: the table says so and the hint steers to env:
+		// refs instead of asking for a paste that cannot land.
+		expect(t, r, 0, "no keychain on this platform", "env:NAME")
+		if strings.Contains(r.stdout, "first present account") {
+			t.Errorf("claims a present account with none:\n%s", r.stdout)
+		}
+		expect(t, w.run("", "accounts", "set"), 2, "usage: roscoe accounts set <name>")
+		return
+	}
+	expect(t, r, 0, "roscoe accounts set primary")
 	rows := strings.Split(plain(r.stdout), "\n")
 	for _, row := range rows[1:4] {
 		if !strings.Contains(row, " no ") {

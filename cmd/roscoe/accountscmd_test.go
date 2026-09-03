@@ -56,3 +56,24 @@ func TestAccountsHintPriority(t *testing.T) {
 		t.Errorf("an unused account asked for a token: %q", got)
 	}
 }
+
+// Off macOS, or over ssh, the keychain answers "locked" rather than yes or
+// no. The hint must then point at an env: ref, and must never claim a
+// present account when there is none.
+func TestAccountsHintWhenKeychainUnavailable(t *testing.T) {
+	rows := []accounts.Row{
+		{Name: "primary", Ref: "keychain:roscoe-account-primary", Enabled: true, Present: "no keychain on this platform; use an env: ref", UsedBy: []string{"tier 2"}},
+		{Name: "api-fallback", Ref: "env:ANTHROPIC_API_KEY", Enabled: false, Present: "no"},
+	}
+	got := accountsHint(rows)
+	if !strings.Contains(got, "env:NAME") || !strings.Contains(got, "primary") {
+		t.Errorf("hint = %q, want it to steer primary to an env: ref", got)
+	}
+	if strings.Contains(got, "first present") {
+		t.Errorf("hint claims a present account when none is: %q", got)
+	}
+	none := []accounts.Row{{Name: "spare", Ref: "keychain:x", Enabled: true, Present: "no"}}
+	if got := accountsHint(none); !strings.Contains(got, "claude's own login") {
+		t.Errorf("with nothing present and nothing used, hint = %q", got)
+	}
+}

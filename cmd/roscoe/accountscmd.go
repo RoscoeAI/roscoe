@@ -85,7 +85,21 @@ func accountsHint(rows []accounts.Row) string {
 			return fmt.Sprintf("%s needs %s in the env file", r.Name, strings.TrimPrefix(r.Ref, "env:"))
 		}
 	}
-	return "workers run under the first present account in tiers.middle.accounts"
+	// A keychain that cannot be asked (ssh session, or no keychain at all on
+	// this platform) is neither present nor absent; the fix is a different
+	// kind of ref, not a paste.
+	for _, r := range rows {
+		if r.Enabled && r.Present != "yes" && r.Present != "no" && strings.HasPrefix(r.Ref, "keychain:") && len(r.UsedBy) > 0 {
+			return fmt.Sprintf("%s's keychain cannot be read here (%s); set accounts.%s.token_ref to env:NAME and put NAME in the env file",
+				r.Name, r.Present, r.Name)
+		}
+	}
+	for _, r := range rows {
+		if r.Enabled && r.Present == "yes" {
+			return "workers run under the first present account in tiers.middle.accounts"
+		}
+	}
+	return "no account is present; workers use claude's own login"
 }
 
 // setAccount stores a token for a keychain: account. The security tool asks
