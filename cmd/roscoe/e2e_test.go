@@ -925,9 +925,23 @@ func (w *world) runPTY(steps []ptyStep, args ...string) result {
 		defer mu.Unlock()
 		return plain(out.String())
 	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	exited := func() bool {
+		select {
+		case err := <-done:
+			done <- err
+			return true
+		default:
+			return false
+		}
+	}
 	for _, st := range steps {
 		deadline := time.Now().Add(10 * time.Second)
 		for !strings.Contains(screen(), st.expect) {
+			if exited() {
+				w.t.Fatalf("exited before %q appeared on the terminal; saw:\n%s", st.expect, screen())
+			}
 			if time.Now().After(deadline) {
 				cmd.Process.Kill()
 				w.t.Fatalf("waited 10s for %q on the terminal; saw:\n%s", st.expect, screen())
@@ -941,8 +955,6 @@ func (w *world) runPTY(steps []ptyStep, args ...string) result {
 			}
 		}
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
 	select {
 	case err = <-done:
 	case <-time.After(15 * time.Second):
@@ -975,6 +987,15 @@ func (l *lockedBuffer) Write(p []byte) (int, error) {
 func TestE2EAccountsSetStoresThePaste(t *testing.T) {
 	w := newWorld(t)
 	w.init()
+	if runtime.GOOS != "darwin" {
+		// No keychain to store into: the command says so at the terminal
+		// too, before asking for anything.
+		r := w.runPTY([]ptyStep{{expect: "no keychain on this platform"}}, "accounts", "set", "primary")
+		if r.code == 0 {
+			t.Errorf("exit 0 with nowhere to store:\n%s", r.stdout)
+		}
+		return
+	}
 	r := w.runPTY([]ptyStep{
 		{expect: "password data for new item:", send: "sk-ant-oat01-pasted\r"},
 		{expect: "stored under keychain:roscoe-account-primary"},
