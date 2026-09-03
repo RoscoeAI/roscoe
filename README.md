@@ -168,7 +168,7 @@ has run, newest first, with what each cost and the first thing you said;
 A conversation too large to reload whole is resumed from its most recent
 messages, sized to fit the model; if the model still refuses the window as
 too long, chat halves it and retries on its own. `roscoe chat --last` resumes the newest, and `roscoe chat --pick` offers a
-numbered list.
+numbered list. Bare `roscoe` at a terminal opens the chat, and `/resume` inside it lists recent conversations to pick from with the arrow keys.
 
 ## Working a charter, not a prompt
 
