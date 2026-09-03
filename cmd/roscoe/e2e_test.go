@@ -191,6 +191,10 @@ case "$sub" in
 esac
 echo "fake security: unhandled $sub" >&2; exit 1
 `)
+	// Nothing a test runs may open a browser or touch the clipboard.
+	for _, tool := range []string{"open", "xdg-open", "pbcopy", "xclip"} {
+		w.fake(tool, "#!/bin/sh\ncat >/dev/null 2>&1; exit 0\n")
+	}
 	w.cfgPath = filepath.Join(w.home, ".roscoe", "roscoe.json")
 	return w
 }
