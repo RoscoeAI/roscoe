@@ -32,6 +32,22 @@ type fakeProvider struct {
 	url   string
 	mu    sync.Mutex
 	calls []providerCall
+	// verdict is what a quorum voter answers; a ballot is recognised by its
+	// prompt. Empty means the default: done, confident.
+	verdict string
+	ballots int
+}
+
+func (fp *fakeProvider) setVerdict(v string) {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	fp.verdict = v
+}
+
+func (fp *fakeProvider) ballotCount() int {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	return fp.ballots
 }
 
 func startFakeProvider(t *testing.T) *fakeProvider {
@@ -60,6 +76,18 @@ func startFakeProvider(t *testing.T) *fakeProvider {
 		_ = json.Unmarshal(body, &req)
 		fp.record(r, req.Model)
 		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(body), "You are one voter") {
+			fp.mu.Lock()
+			fp.ballots++
+			v := fp.verdict
+			fp.mu.Unlock()
+			if v == "" {
+				v = `{"action":"done","confidence":0.9,"reason":"the charter is met","kinds":[]}`
+			}
+			text, _ := json.Marshal(v)
+			fmt.Fprintf(w, `{"id":"msg_v","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":%s}],"stop_reason":"end_turn","usage":{"input_tokens":900,"output_tokens":40}}`, req.Model, text)
+			return
+		}
 		// The account window, as the API reports it: 12% of the 5-hour
 		// window used, resetting in two hours.
 		now := time.Now()
@@ -412,5 +440,65 @@ func TestE2ESmokeFull(t *testing.T) {
 	expect(t, r, 1, "✗ tier3-count-tokens", "✗ tier3-live-ping", "✓ anthropic-count-tokens", "✓ claude-bin")
 	if !regexp.MustCompile(`tier3-live-ping\s+status 502`).MatchString(r.stdout) {
 		t.Errorf("unreachable tier 3 should surface as a 502 from the router:\n%s", r.stdout)
+	}
+}
+
+// A loop judged by the quorum: the voters on the loopback provider answer
+// ballots, the unreadable account voter is reported as unavailable, and
+// the decision follows the rule, the confidence floor, the always-escalate
+// kinds, and the autonomy dial.
+func TestE2ELoopWithQuorum(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	fp := startFakeProvider(t)
+	w.pointAtFake(fp)
+
+	// Two of three voters answer "done": a majority, above the floor.
+	r := w.run("", "loop", "Do the thing", "--max-iterations", "3", "--task-id", "q-1")
+	expect(t, r, 0, "[judge] quorum of 3 · majority · min confidence 0.70",
+		"[vote] deepinfra/zai-org/GLM-5.3-Flash: done 0.90 · the charter is met",
+		"[vote] anthropic/sonnet: unavailable (auth: account \"secondary\" is keychain:",
+		"[iteration 1] continuing · done · ", "2 of 2 voters: the charter is met",
+		"[loop] done after 1 iterations")
+	if n := fp.ballotCount(); n != 2 {
+		t.Errorf("%d ballots, want 2", n)
+	}
+	ledger := readFile(filepath.Join(w.home, ".roscoe", "runs", "q-1", "events.jsonl"))
+	for _, want := range []string{`"quorum.vote"`, `"action":"done"`, `"voter":"deepinfra/zai-org/GLM-5.3-Flash"`, `"error":"auth: account`} {
+		if !strings.Contains(ledger, want) {
+			t.Errorf("ledger lacks %s", want)
+		}
+	}
+
+	// "continue" keeps the loop going to its ceiling.
+	fp.setVerdict(`{"action":"continue","confidence":0.8,"reason":"more to do","kinds":[]}`)
+	r = w.run("", "loop", "Keep going", "--max-iterations", "2")
+	expect(t, r, 3, "[iteration 1] continuing · continue · ", "2 of 2 voters: more to do", "hit the 2 iteration ceiling")
+	if n := fp.ballotCount(); n != 6 {
+		t.Errorf("%d ballots after two more iterations, want 6", n)
+	}
+
+	// A flagged always-escalate kind outranks everything.
+	fp.setVerdict(`{"action":"continue","confidence":0.9,"reason":"fine","kinds":["destructive-actions"]}`)
+	r = w.run("", "loop", "Careful", "--max-iterations", "3")
+	expect(t, r, 3, `flagged "destructive-actions", which always escalates`, "[loop] escalate after 1 iterations")
+
+	// Below the confidence floor: a question for the human, unless autonomy
+	// is at 100, where the loop keeps working.
+	fp.setVerdict(`{"action":"done","confidence":0.4,"reason":"maybe","kinds":[]}`)
+	r = w.run("", "loop", "Unsure", "--max-iterations", "3")
+	expect(t, r, 3, "done at 0.40 confidence, below the 0.70 floor", "[loop] escalate after 1 iterations")
+	expect(t, w.run("", "config", "set", "autonomy.level", "100"), 0)
+	r = w.run("", "loop", "Unsure", "--max-iterations", "2")
+	expect(t, r, 3, "below the 0.70 floor; continuing because autonomy is 100", "hit the 2 iteration ceiling")
+
+	// --no-quorum switches the judge off.
+	r = w.run("", "loop", "Own status", "--max-iterations", "1", "--no-quorum")
+	expect(t, r, 3, "[judge] the worker's own status line (no quorum)")
+	if strings.Contains(r.all(), "[vote]") {
+		t.Error("votes were cast with --no-quorum")
+	}
+	if strings.Contains(r.all(), "dk-test-secret") {
+		t.Fatal("the provider key leaked")
 	}
 }
