@@ -748,10 +748,8 @@ func (n *narrator) toScreen(ev *streamjson.Event) {
 	}
 }
 
-// narrate and narrateTo keep the old call shape for callers that do not need
-// to ask about streaming afterwards.
-func narrate(ev *streamjson.Event) { (&narrator{}).event(ev) }
-
+// narrateTo keeps the old call shape for callers that do not need to ask
+// about streaming afterwards.
 func narrateTo(sc *screen, ev *streamjson.Event) { (&narrator{sc: sc}).event(ev) }
 
 // assistantContent pulls text and tool_use names out of an assistant event
@@ -1059,11 +1057,6 @@ func openBrowser(u string) {
 	default:
 		_ = exec.Command("xdg-open", u).Start()
 	}
-}
-
-func cmdStub(name string) int {
-	fmt.Fprintf(os.Stderr, "roscoe %s: coming in slice 2. It will %s See ARCHITECTURE.md for the design.\n", name, stubBlurbs[name])
-	return 2
 }
 
 // readLineOrInterrupt reads one line from r, giving up when ctx ends. A

@@ -105,3 +105,67 @@ func TestTurnInputQueuesWhileRunning(t *testing.T) {
 		t.Errorf("queued = %q", p.next())
 	}
 }
+
+// Esc with a draft clears the draft; esc on an empty box stops the turn.
+// Tab with a draft steers: the worker is interrupted and the line is what
+// gets sent next.
+func TestTurnInputEscAndTab(t *testing.T) {
+	sc := &screen{rows: 24, cols: 80, liveStart: -1, out: io.Discard}
+
+	keys := &keyReader{events: make(chan byte, 32)}
+	cancelled := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan pending, 1)
+	go func() { done <- (&turnInput{}).run(ctx, sc, keys, func() { cancelled++; cancel() }) }()
+	feedKeys(keys, "draft")
+	time.Sleep(60 * time.Millisecond)
+	feedKeys(keys, "\x1b") // clears the draft, turn keeps running
+	time.Sleep(120 * time.Millisecond)
+	feedKeys(keys, "\x1b") // nothing to clear: stop
+	p := <-done
+	if !p.Esc || p.next() != "" || cancelled != 1 {
+		t.Errorf("esc twice = %+v, cancelled %d", p, cancelled)
+	}
+
+	keys = &keyReader{events: make(chan byte, 32)}
+	cancelled = 0
+	ctx, cancel = context.WithCancel(context.Background())
+	done = make(chan pending, 1)
+	go func() { done <- (&turnInput{}).run(ctx, sc, keys, func() { cancelled++; cancel() }) }()
+	feedKeys(keys, "\t") // an empty tab is ignored
+	feedKeys(keys, "go left instead\t")
+	p = <-done
+	if p.Steer != "go left instead" || p.next() != "go left instead" || cancelled != 1 {
+		t.Errorf("tab steer = %+v, cancelled %d", p, cancelled)
+	}
+}
+
+// A bracketed paste's newlines are content, not sends; up and down scroll
+// the screen rather than editing the line.
+func TestTurnInputPasteAndScroll(t *testing.T) {
+	sc := &screen{rows: 10, cols: 80, liveStart: -1, out: io.Discard, active: true}
+	for i := 0; i < 40; i++ {
+		sc.lines = append(sc.lines, "old")
+	}
+	keys := &keyReader{events: make(chan byte, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan pending, 1)
+	go func() { done <- (&turnInput{}).run(ctx, sc, keys, func() {}) }()
+	feedKeys(keys, "\x1b[200~two\rlines\x1b[201~\r") // paste start, text with a newline, paste end, then enter
+	feedKeys(keys, "\x1b[A")                         // up: scroll
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	p := <-done
+	if p.next() != "two\nlines" {
+		t.Errorf("pasted queue = %q", p.next())
+	}
+	if sc.offset == 0 {
+		t.Error("up during a turn should scroll the screen")
+	}
+}
+
+func feedKeys(keys *keyReader, s string) {
+	for _, b := range []byte(s) {
+		keys.events <- b
+	}
+}

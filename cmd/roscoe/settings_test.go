@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -323,4 +325,43 @@ func TestNoteForRowCarriesTheEffect(t *testing.T) {
 		}
 	}
 	t.Fatal("no effort row")
+}
+
+// applySetting writes only what validates, and puts the old value back
+// otherwise; both outcomes land (or not) in the file the panel edits.
+func TestApplySettingValidatesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "roscoe.json")
+	cfg := config.Default()
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	sc := &screen{rows: 24, cols: 80, liveStart: -1, out: io.Discard}
+	var row settingRow
+	for _, r := range settingsRows(cfg) {
+		if r.path == "tiers.middle.effort" {
+			row = r
+		}
+	}
+	applySetting(sc, cfg, path, row, "")
+	applySetting(sc, cfg, path, row, "turbo")
+	if cfg.Tiers.Middle.Effort == "turbo" {
+		t.Error("an invalid effort stayed in memory")
+	}
+	if saved, err := config.Load(path); err != nil || saved.Tiers.Middle.Effort == "turbo" {
+		t.Errorf("file after an invalid value: %v, effort %q", err, saved.Tiers.Middle.Effort)
+	}
+	applySetting(sc, cfg, path, row, "high")
+	if saved, err := config.Load(path); err != nil || saved.Tiers.Middle.Effort != "high" {
+		t.Errorf("file after a valid value: %v, effort %q", err, saved.Tiers.Middle.Effort)
+	}
+	// A value that does not even parse for the field is refused too.
+	for _, r := range settingsRows(cfg) {
+		if r.path == "tiers.subagents.max_concurrent" {
+			applySetting(sc, cfg, path, r, "many")
+		}
+	}
+	if saved, _ := config.Load(path); saved.Tiers.Subagents.MaxConcurrent != cfg.Tiers.Subagents.MaxConcurrent {
+		t.Error("an unparsable value changed the file")
+	}
 }

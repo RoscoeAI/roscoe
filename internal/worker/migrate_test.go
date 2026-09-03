@@ -544,3 +544,18 @@ func TestTrimmedTranscriptFitsTheBudgetAfterIDRewrite(t *testing.T) {
 		t.Error("old session id survived the rewrite")
 	}
 }
+
+// trimTranscript is the default-budget entry: a small transcript passes
+// through whole; the flag says nothing was dropped.
+func TestTrimTranscriptDefaultBudget(t *testing.T) {
+	src := `{"type":"user","message":{"role":"user","content":"hi"}}` + "\n" +
+		`{"type":"file-history-snapshot","x":1}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}` + "\n"
+	lines, dropped, err := trimTranscript(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || !dropped {
+		t.Errorf("kept %d lines, dropped=%v; want the 2 conversation records and dropped=true for the bookkeeping", len(lines), dropped)
+	}
+}

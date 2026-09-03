@@ -94,3 +94,11 @@ func TestInspect(t *testing.T) {
 		t.Errorf("inspect = %+v", m)
 	}
 }
+
+// The machine has memory, and the probe finds it on the platforms CI and
+// the operator run: macOS via sysctl, Linux via /proc/meminfo.
+func TestMemGBFindsTheMachinesMemory(t *testing.T) {
+	if got := memGB(); got <= 0 || got > 4096 {
+		t.Errorf("memGB = %d", got)
+	}
+}
