@@ -504,3 +504,43 @@ func TestImportSessionWithSmallerBudget(t *testing.T) {
 		t.Error("OversizedBy does not honour its budget")
 	}
 }
+
+// The new session id is 36 characters where the old one may be 7, and it is
+// substituted into every record. The window on disk must still fit the
+// budget, or the cap is not a cap.
+func TestTrimmedTranscriptFitsTheBudgetAfterIDRewrite(t *testing.T) {
+	srcDir := filepath.Join(t.TempDir(), "src", "projects", "p")
+	os.MkdirAll(srcDir, 0o755)
+	src := filepath.Join(srcDir, "abc.jsonl")
+	var b strings.Builder
+	pad := strings.Repeat("x", 500)
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&b, `{"type":"user","sessionId":"abc","message":{"role":"user","content":"%d %s"}}`+"\n", i, pad)
+	}
+	os.WriteFile(src, []byte(b.String()), 0o600)
+
+	destCfg := t.TempDir()
+	const budget = 64 << 10
+	newID, err := importSessionWithBudget(src, destCfg, "abc", nil, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newID == "abc" {
+		t.Fatal("an oversized import kept the old id")
+	}
+	matches, _ := filepath.Glob(filepath.Join(destCfg, "projects", "*", newID+".jsonl"))
+	if len(matches) != 1 {
+		t.Fatalf("trimmed transcript not found: %v", matches)
+	}
+	fi, _ := os.Stat(matches[0])
+	if fi.Size() > budget {
+		t.Errorf("trimmed transcript is %d bytes, budget %d", fi.Size(), budget)
+	}
+	if fi.Size() < budget*9/10 {
+		t.Errorf("trimmed transcript is %d bytes; the trimmer left most of a %d budget unused", fi.Size(), budget)
+	}
+	data, _ := os.ReadFile(matches[0])
+	if strings.Contains(string(data), `"abc"`) {
+		t.Error("old session id survived the rewrite")
+	}
+}

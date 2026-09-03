@@ -147,6 +147,14 @@ func trimTranscript(r io.Reader) ([][]byte, bool, error) {
 
 // trimTranscriptTo is trimTranscript with an explicit byte budget.
 func trimTranscriptTo(r io.Reader, budget int) ([][]byte, bool, error) {
+	return trimTranscriptRewriting(r, budget, nil)
+}
+
+// trimTranscriptRewriting applies rewrite to every kept record BEFORE it is
+// measured against the budget, so what is written is what was budgeted. The
+// session-id substitution grows every record (a 7-char id becomes a 36-char
+// uuid), and measuring first once produced a 246KB window under a 240KB cap.
+func trimTranscriptRewriting(r io.Reader, budget int, rewrite func([]byte) []byte) ([][]byte, bool, error) {
 	if budget <= 0 {
 		budget = maxResumeBytes
 	}
@@ -165,6 +173,9 @@ func trimTranscriptTo(r io.Reader, budget int) ([][]byte, bool, error) {
 		}
 		if len(line) > maxRecordBytes {
 			line = clipRecord(line)
+		}
+		if rewrite != nil {
+			line = rewrite(line)
 		}
 		kept = append(kept, line)
 	}
@@ -301,7 +312,18 @@ func trimIntoNewSession(srcPath, destDir, sessionID string, notify func(string),
 	}
 	defer src.Close()
 
-	lines, _, err := trimTranscriptTo(src, budget)
+	newID, err := uuidV4()
+	if err != nil {
+		return "", fmt.Errorf("worker: new session id: %w", err)
+	}
+	// The records are rewritten to the new id before they are budgeted, so
+	// the window on disk is the window that was measured.
+	var rewrite func([]byte) []byte
+	if sessionID != "" {
+		old, replacement := []byte(sessionID), []byte(newID)
+		rewrite = func(line []byte) []byte { return bytes.ReplaceAll(line, old, replacement) }
+	}
+	lines, _, err := trimTranscriptRewriting(src, budget, rewrite)
 	if err != nil {
 		return "", err
 	}
@@ -309,21 +331,13 @@ func trimIntoNewSession(srcPath, destDir, sessionID string, notify func(string),
 		return "", fmt.Errorf("worker: transcript %s has no conversation records", srcPath)
 	}
 
-	newID, err := uuidV4()
-	if err != nil {
-		return "", fmt.Errorf("worker: new session id: %w", err)
-	}
 	dest := filepath.Join(destDir, newID+".jsonl")
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("worker: create trimmed transcript: %w", err)
 	}
-	old, replacement := []byte(sessionID), []byte(newID)
 	var bytesWritten int
 	for _, line := range lines {
-		if sessionID != "" {
-			line = bytes.ReplaceAll(line, old, replacement)
-		}
 		n, err := out.Write(append(line, '\n'))
 		if err != nil {
 			out.Close()

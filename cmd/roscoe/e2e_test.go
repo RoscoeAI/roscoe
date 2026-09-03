@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,14 +83,23 @@ if [ "$FAKE_CLAUDE_MODE" = "fail" ]; then
   echo '{"type":"error","error":{"type":"invalid_request_error","message":"fake"}}' >&2
   exit 1
 fi
-prompt=""; sid="fake-session"; model="claude-sonnet-5"; last=""
+prompt=""; sid="fake-session"; model="claude-sonnet-5"; last=""; resumed=""
 for a in "$@"; do
   case "$last" in
     -p) prompt="$a";;
-    --session-id|--resume) sid="$a";;
+    --session-id) sid="$a";;
+    --resume) sid="$a"; resumed=1;;
   esac
   last="$a"
 done
+# toolong: the first resumed turn is refused for size, the way the API
+# refuses an oversized window; every turn after that succeeds.
+if [ "$FAKE_CLAUDE_MODE" = "toolong" ] && [ -n "$resumed" ] && [ ! -f "$FAKE_CLAUDE_LOG.toolong" ]; then
+  : > "$FAKE_CLAUDE_LOG.toolong"
+  printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s"}\n' "$sid" "$model"
+  printf '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Prompt is too long","session_id":"%s","total_cost_usd":0,"num_turns":0}\n' "$sid"
+  exit 0
+fi
 echo "start $prompt" >> "$FAKE_CLAUDE_EVENTS"
 printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools":["Read","Bash"]}\n' "$sid" "$model"
 [ -n "$FAKE_CLAUDE_WARM_DELAY" ] && sleep "$FAKE_CLAUDE_WARM_DELAY"
@@ -630,4 +640,120 @@ func TestE2ESessionsAndTopAfterRuns(t *testing.T) {
 	}
 	// top sums the same ledgers: three runs, one turn each, $0.0369.
 	expect(t, w.run("", "top", "--no-fleet"), 0, "today     $0.04 · 3 runs · 3 turns", "week      $0.04 · 3 runs · 3 turns", "just now")
+}
+
+// writeTranscript puts a claude-style session log where FindSession looks,
+// with n user/assistant pairs of about 1KB each plus the bookkeeping records
+// (file history, attachments) that make real logs enormous and that the
+// trimmer drops.
+func (w *world) writeTranscript(configDir, sessionID string, pairs int) string {
+	w.t.Helper()
+	dir := filepath.Join(configDir, "projects", "-Users-someone-proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		w.t.Fatal(err)
+	}
+	var b strings.Builder
+	pad := strings.Repeat("x", 900)
+	for i := 0; i < pairs; i++ {
+		fmt.Fprintf(&b, `{"type":"user","sessionId":"%s","uuid":"u%d","message":{"role":"user","content":"question %d %s"}}`+"\n", sessionID, i, i, pad)
+		fmt.Fprintf(&b, `{"type":"assistant","sessionId":"%s","uuid":"a%d","message":{"role":"assistant","content":[{"type":"text","text":"answer %d %s"}]}}`+"\n", sessionID, i, i, pad)
+		fmt.Fprintf(&b, `{"type":"file-history-snapshot","sessionId":"%s","snapshot":{"trackedFileBackups":{"f%d":"%s"}}}`+"\n", sessionID, i, pad)
+	}
+	path := filepath.Join(dir, sessionID+".jsonl")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		w.t.Fatal(err)
+	}
+	return path
+}
+
+func TestE2ERunResume(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	claudeHome := filepath.Join(w.home, ".claude")
+
+	// Unknown session: say so and where it looked.
+	expect(t, w.run("", "run", "--resume", "nope", "go on"), 1, "session nope not found", "/projects")
+
+	// A small session resumes as itself.
+	w.writeTranscript(claudeHome, "abc-small", 3)
+	r := w.run("", "run", "--resume", "abc-small", "go on")
+	expect(t, r, 0, "[migrate] importing session abc-small", "[done]")
+	argv := w.claudeStarts()[0]
+	if !strings.Contains(argv, "--resume abc-small") || strings.Contains(argv, "--session-id") {
+		t.Errorf("a resumed run should pass --resume and no --session-id:\n%s", argv)
+	}
+	if strings.Contains(r.all(), "too large") {
+		t.Errorf("a 9KB session was trimmed:\n%s", r.stderr)
+	}
+
+	// A source elsewhere is found through --from-config-dir.
+	other := filepath.Join(w.home, "elsewhere")
+	w.writeTranscript(other, "abc-other", 2)
+	expect(t, w.run("", "run", "--resume", "abc-other", "--from-config-dir", other, "go on"), 0, "[migrate] importing session abc-other")
+}
+
+// A transcript past the window is trimmed to its most recent records, under
+// a new session id, and the operator is told how much came along.
+func TestE2ERunResumeTrimsAnOversizedSession(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	claudeHome := filepath.Join(w.home, ".claude")
+	src := w.writeTranscript(claudeHome, "abc-big", 200) // ~600KB on disk
+	fi, _ := os.Stat(src)
+	if fi.Size() < 400<<10 {
+		t.Fatalf("fixture is only %d bytes", fi.Size())
+	}
+
+	r := w.run("", "run", "--resume", "abc-big", "go on")
+	expect(t, r, 0, "too large to reload whole; resuming its most recent", "[done]")
+	m := regexp.MustCompile(`most recent (\d+) messages \((\d+)KB\)`).FindStringSubmatch(r.stderr)
+	if m == nil {
+		t.Fatalf("no trim notice:\n%s", r.stderr)
+	}
+	kb, _ := strconv.Atoi(m[2])
+	if kb > 240 || kb < 200 {
+		t.Errorf("trimmed window is %dKB; want just under the 240KB cap", kb)
+	}
+	argv := w.claudeStarts()[0]
+	sid := regexp.MustCompile(`--resume (\S+)`).FindStringSubmatch(argv)
+	if sid == nil || sid[1] == "abc-big" {
+		t.Fatalf("the trimmed session should resume under a new id:\n%s", argv)
+	}
+	trimmed, err := os.ReadFile(filepath.Join(claudeHome, "projects", "-Users-someone-proj", sid[1]+".jsonl"))
+	if err != nil {
+		t.Fatalf("no trimmed transcript for %s: %v", sid[1], err)
+	}
+	if strings.Contains(string(trimmed), "file-history-snapshot") {
+		t.Error("bookkeeping records survived the trim")
+	}
+	if !strings.Contains(string(trimmed), "question 199") || strings.Contains(string(trimmed), `"question 0 `) {
+		t.Error("the trim should keep the newest records and drop the oldest")
+	}
+	if strings.Contains(string(trimmed), "abc-big") {
+		t.Error("the trimmed transcript still carries the old session id")
+	}
+}
+
+// When the model still refuses the window as too long, run halves it and
+// sends the same prompt again rather than handing the operator the error.
+func TestE2ERunResumeRetriesWhenPromptIsTooLong(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.claudeMode = "toolong"
+	w.writeTranscript(filepath.Join(w.home, ".claude"), "abc-big", 200)
+
+	r := w.run("", "run", "--resume", "abc-big", "go on")
+	expect(t, r, 0, "the model refused that much history; retrying with the most recent 120KB", "[done]")
+	starts := w.claudeStarts()
+	if len(starts) != 2 {
+		t.Fatalf("claude started %d times, want 2 (refused, then retried):\n%s", len(starts), strings.Join(starts, "\n"))
+	}
+	for i, a := range starts {
+		if !strings.Contains(a, "--resume ") {
+			t.Errorf("start %d was not a resume:\n%s", i, a)
+		}
+	}
+	if strings.Contains(r.stdout, "Prompt is too long") {
+		t.Errorf("the refusal leaked into the answer:\n%s", r.stdout)
+	}
 }
