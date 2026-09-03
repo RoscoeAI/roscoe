@@ -57,6 +57,11 @@ type world struct {
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	root := t.TempDir()
+	// macOS hands out /var/... which is really /private/var/...; the binary
+	// reports the resolved form from os.Getwd, so compare against that.
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
 	w := &world{
 		t:      t,
 		home:   filepath.Join(root, "home"),

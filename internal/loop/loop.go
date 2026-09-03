@@ -170,6 +170,10 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 				merged := setSection(before, RecalledSection, recalled)
 				if werr := Write(o.Dir, merged); werr == nil {
 					before = merged
+					// The prompt for this iteration was built before the
+					// recall existed; refresh its memory block so the worker
+					// reads the recall in its instructions, not only on disk.
+					prompt = refreshMemoryBlock(prompt, Projection(merged, 0))
 					o.note("loop.recalled", map[string]any{
 						"task": o.TaskID, "iteration": n, "bytes": len(recalled),
 					})
@@ -345,9 +349,9 @@ func KernelPrompt(charter, memory string) string {
 	var b strings.Builder
 	b.WriteString("You are continuing work earlier iterations started. Their memory follows. You did not write it; you are building on it, not starting over.\n\n")
 	if strings.TrimSpace(memory) != "" {
-		b.WriteString("--- MEMORY (" + FileName + ") ---\n")
+		b.WriteString(memoryOpen)
 		b.WriteString(strings.TrimSpace(memory))
-		b.WriteString("\n--- END MEMORY ---\n\n")
+		b.WriteString(memoryClose + "\n\n")
 	}
 	b.WriteString(`Do the next useful piece of work toward the charter.
 
@@ -384,4 +388,29 @@ func firstLine(s string) string {
 		return "(no detail)"
 	}
 	return s
+}
+
+const (
+	memoryOpen  = "--- MEMORY (" + FileName + ") ---\n"
+	memoryClose = "\n--- END MEMORY ---"
+)
+
+// refreshMemoryBlock replaces the memory block inside a kernel prompt with memory,
+// or adds one when the prompt has none. Anything the judge put before the
+// block (a retry preface, say) is kept.
+func refreshMemoryBlock(prompt, memory string) string {
+	memory = strings.TrimSpace(memory)
+	start := strings.Index(prompt, memoryOpen)
+	if start < 0 {
+		if memory == "" {
+			return prompt
+		}
+		return memoryOpen + memory + memoryClose + "\n\n" + prompt
+	}
+	end := strings.Index(prompt[start:], memoryClose)
+	if end < 0 {
+		return prompt
+	}
+	end += start
+	return prompt[:start] + memoryOpen + memory + prompt[end:]
 }

@@ -622,3 +622,58 @@ func TestFreshLoopStillRuns(t *testing.T) {
 		t.Errorf("a fresh charter ran %d iterations, want 1", sum.Iterations)
 	}
 }
+
+// The recall has to reach the worker's instructions on the very iteration it
+// was made, not the next one. The first iteration's prompt is built from the
+// seed before Recall runs, so it must be refreshed.
+func TestRecallIsInTheFirstIterationsPrompt(t *testing.T) {
+	dir := t.TempDir()
+	var prompts []string
+	dispatch := func(_ context.Context, _ Iteration, prompt, _ string) (*streamjson.ResultEvent, string, error) {
+		prompts = append(prompts, prompt)
+		_ = Write(dir, "## Status\ndone\n")
+		return &streamjson.ResultEvent{SessionID: "s"}, "s", nil
+	}
+	_, err := Run(context.Background(), Options{
+		Dir: dir, Charter: "x", Dispatch: dispatch,
+		Recall: func(context.Context, Iteration) string { return "- the auth module lives in internal/auth" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("%d dispatches", len(prompts))
+	}
+	p := prompts[0]
+	if !strings.Contains(p, "internal/auth") || !strings.Contains(p, "## "+RecalledSection) {
+		t.Errorf("iteration 1's prompt lacks the recall:\n%s", p)
+	}
+	if strings.Count(p, memoryOpen) != 1 || strings.Count(p, memoryClose) != 1 {
+		t.Errorf("memory block duplicated or lost:\n%s", p)
+	}
+	if !strings.HasSuffix(p, "Charter: x") {
+		t.Errorf("the charter no longer ends the prompt:\n%s", p)
+	}
+}
+
+func TestRefreshMemoryBlock(t *testing.T) {
+	base := KernelPrompt("x", "## Status\ncontinuing")
+	got := refreshMemoryBlock(base, "## Status\ncontinuing\n\n## Recalled\n- fact")
+	if !strings.Contains(got, "## Recalled\n- fact") || strings.Count(got, memoryOpen) != 1 {
+		t.Errorf("replace:\n%s", got)
+	}
+	// A retry preface before the block survives.
+	pref := "The previous iteration failed with: boom\n\n" + base
+	got = refreshMemoryBlock(pref, "## Plan\n- [ ] y")
+	if !strings.HasPrefix(got, "The previous iteration failed with: boom") || !strings.Contains(got, "## Plan\n- [ ] y") {
+		t.Errorf("preface lost:\n%s", got)
+	}
+	// No block at all: one is added in front.
+	got = refreshMemoryBlock("plain", "## Notes\n- n")
+	if !strings.HasPrefix(got, memoryOpen+"## Notes\n- n"+memoryClose) || !strings.HasSuffix(got, "plain") {
+		t.Errorf("insert:\n%s", got)
+	}
+	if refreshMemoryBlock("plain", "") != "plain" {
+		t.Error("empty memory should leave a plain prompt alone")
+	}
+}
