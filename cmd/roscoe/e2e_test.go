@@ -54,6 +54,8 @@ type world struct {
 	claudeMode string
 	warmDelay  string // seconds the fake waits before its first assistant event
 	resultFile string // when set, the fake's result text is this file's content
+	nodes      string // the fake ssh's machines: one directory per host
+	ledger     string // what a fake node's roscoe run writes as its ledger
 	cfgPath    string
 }
 
@@ -74,6 +76,8 @@ func newWorld(t *testing.T) *world {
 		sshLog: filepath.Join(root, "ssh-called"),
 	}
 	w.claudeLog = filepath.Join(root, "claude-argv")
+	w.nodes = filepath.Join(root, "nodes")
+	os.MkdirAll(w.nodes, 0o755)
 	for _, d := range []string{w.home, w.cwd, w.bin, w.kcDir, filepath.Join(w.home, ".roscoe")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -875,6 +879,8 @@ func (w *world) env() []string {
 		"FAKE_CLAUDE_EVENTS=" + w.claudeLog + ".events",
 		"FAKE_CLAUDE_WARM_DELAY=" + w.warmDelay,
 		"FAKE_CLAUDE_RESULT_FILE=" + w.resultFile,
+		"FAKE_NODES=" + w.nodes,
+		"FAKE_NODE_LEDGER=" + w.ledger,
 		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
 		"TERM=dumb",
 		"NO_COLOR=1",

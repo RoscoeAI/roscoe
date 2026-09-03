@@ -239,12 +239,23 @@ func cmdDispatch(ctx context.Context, explicit string, args []string) int {
 	taskID := fs.String("task-id", "", "task id (default: generated)")
 	dir := fs.String("dir", "", "working directory on the node (default: ~/.roscoe/work/<task-id>)")
 	harness := fs.String("harness", "", `worker harness on the node: "claude" or "codex" (default: the node's config)`)
-	_ = fs.Parse(args)
-	if fs.NArg() != 1 {
+	// Flags may come before or after the prompt, as usage promises.
+	var prompts []string
+	rest := args
+	for {
+		_ = fs.Parse(rest)
+		rest = fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		prompts = append(prompts, rest[0])
+		rest = rest[1:]
+	}
+	if len(prompts) != 1 {
 		fmt.Fprintln(os.Stderr, `usage: roscoe dispatch "<prompt>" [--task-id X] [--dir D] [--harness H]`)
 		return 2
 	}
-	prompt := fs.Arg(0)
+	prompt := prompts[0]
 	cfg, _, _, err := loadConfigAndEnv(explicit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "roscoe dispatch: %v\n", err)
@@ -271,10 +282,27 @@ func cmdDispatch(ctx context.Context, explicit string, args []string) int {
 // is visible at once, then the one command that helps.
 func noNodeFree(probes []fleet.Probe) string {
 	msg := "roscoe dispatch: no node can take work right now\n" + nodesTable(probes)
-	if hint := nextStep(probes); hint != "" {
-		return msg + "\n " + strings.TrimSpace(hint) + "\n"
+	// A ready node was refused only because it is full, so say that; the
+	// readiness hint is then about the OTHER nodes (more capacity), never
+	// about the full one, whose missing env file is not why it was refused.
+	var full, rest []fleet.Probe
+	for _, p := range probes {
+		if p.Ready() {
+			full = append(full, p)
+		} else {
+			rest = append(rest, p)
+		}
 	}
-	return msg + "\n every ready node is at its worker limit; wait, or raise nodes[].workers\n"
+	out := msg + "\n"
+	if len(full) > 0 {
+		out += " every ready node is at its worker limit; wait, or raise nodes[].workers\n"
+	}
+	if hint := nextStep(rest); hint != "" {
+		out += " " + strings.TrimSpace(hint) + "\n"
+	} else if len(full) == 0 {
+		out += " no node is ready\n"
+	}
+	return out
 }
 
 // cmdUp brings the fleet to ready as far as software can: deploy to every

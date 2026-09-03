@@ -168,3 +168,20 @@ func TestNodesTableLocalRow(t *testing.T) {
 		t.Errorf("the local row should say it is this machine and how it is used:\n%s", out)
 	}
 }
+
+// A ready node with every slot taken is refused for that reason, not for
+// whatever readiness hint (a missing env file) would otherwise be offered.
+func TestNoNodeFreeNamesTheLimitWhenNodesAreReady(t *testing.T) {
+	full := fleet.Probe{Node: config.Node{Name: "studio", SSH: "s", Workers: 2, Enabled: true},
+		Reachable: true, Claude: "2.1", LoggedIn: true, Roscoe: "v1", HasConfig: true, HasEnv: false, Busy: 2}
+	got := noNodeFree([]fleet.Probe{full})
+	if !strings.Contains(got, "at its worker limit") || strings.Contains(got, "--env") {
+		t.Errorf("refusal = %q", got)
+	}
+	notReadyOne := full
+	notReadyOne.LoggedIn = false
+	notReadyOne.Busy = 0
+	if got := noNodeFree([]fleet.Probe{notReadyOne}); !strings.Contains(got, "claude auth login") {
+		t.Errorf("a node needing login should get the login hint: %q", got)
+	}
+}
