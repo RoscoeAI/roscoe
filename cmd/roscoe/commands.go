@@ -271,13 +271,12 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 			return 2
 		}
 		fmt.Fprint(os.Stderr, "prompt> ")
-		sc := bufio.NewScanner(os.Stdin)
-		sc.Buffer(make([]byte, 0, 64*1024), 10<<20)
-		if !sc.Scan() {
+		line, ok := readLineOrInterrupt(ctx, os.Stdin)
+		if !ok {
 			fmt.Fprintln(os.Stderr)
 			return 130
 		}
-		prompt = strings.TrimSpace(sc.Text())
+		prompt = strings.TrimSpace(line)
 		if prompt == "" {
 			fmt.Fprintln(os.Stderr, "roscoe run: empty prompt")
 			return 2
@@ -1060,4 +1059,30 @@ func openBrowser(u string) {
 func cmdStub(name string) int {
 	fmt.Fprintf(os.Stderr, "roscoe %s: coming in slice 2. It will %s See ARCHITECTURE.md for the design.\n", name, stubBlurbs[name])
 	return 2
+}
+
+// readLineOrInterrupt reads one line from r, giving up when ctx ends. A
+// plain blocking read ignored ctrl-c: the signal cancelled the context, but
+// the scanner never looked, so the prompt sat there echoing ^C.
+func readLineOrInterrupt(ctx context.Context, r io.Reader) (string, bool) {
+	type res struct {
+		line string
+		ok   bool
+	}
+	ch := make(chan res, 1)
+	go func() {
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 10<<20)
+		if sc.Scan() {
+			ch <- res{sc.Text(), true}
+			return
+		}
+		ch <- res{"", false}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", false
+	case got := <-ch:
+		return got.line, got.ok
+	}
 }

@@ -137,20 +137,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 	// A resumed conversation should be visible, not just loaded: replay the
 	// tail so the operator picks up where they left off.
 	if resumeFrom != "" {
-		if msgs, mErr := worker.RecentMessages(resumeFrom, 40); mErr == nil && len(msgs) > 0 {
-			sc.Print("")
-			sc.Printf("%s─ earlier in this conversation ─%s", ansiFaint, ansiReset)
-			for _, m := range msgs {
-				sc.Print("")
-				if m.Role == "user" {
-					sc.Print(ansiGreen + "› " + ansiReset + ansiBold + firstLines(m.Text, 6, 600) + ansiReset)
-					continue
-				}
-				sc.Print(ansiDim + firstLines(m.Text, 8, 800) + ansiReset)
-			}
-			sc.Print("")
-			sc.Printf("%s─ picking up here ─%s", ansiFaint, ansiReset)
-		}
+		replayTail(sc, resumeFrom)
 	}
 
 	// pendingPrompt is what the operator typed while the last turn was still
@@ -195,6 +182,26 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 			session, resumeFrom = "", ""
 			*taskID = newTaskID()
 			sc.Print(ansiDim + "started a fresh session" + ansiReset)
+			continue
+		case msg == "/resume" || strings.HasPrefix(msg, "/resume "):
+			// Pick an earlier conversation and carry on in it, the way the
+			// harness's own /resume does. An id skips the picker.
+			id := strings.TrimSpace(strings.TrimPrefix(msg, "/resume"))
+			if id == "" {
+				var ok bool
+				if id, ok = pickSessionOn(sc, keys, cfg, session); !ok {
+					continue
+				}
+			}
+			src, ferr := worker.FindSession(*fromConfig, id)
+			if ferr != nil {
+				sc.Printf("%s%v%s", ansiDim, ferr, ansiReset)
+				continue
+			}
+			session, resumeFrom, resumeBudget = id, src, 0
+			*taskID = newTaskID()
+			sc.Printf("%sresuming %s%s", ansiDim, id, ansiReset)
+			replayTail(sc, resumeFrom)
 			continue
 		case msg == "/help":
 			// Same one-liners the prompt shows while you type, grouped by
@@ -478,6 +485,7 @@ var commandHelp = map[string]string{
 	"/settings": "every tier's model and effort on one screen, under its tier; arrows change them",
 	"/autonomy": "0 to 100: how much roscoe decides without asking you; fleet-wide, no tier",
 	"/new":      "start a fresh session; this one stays on disk",
+	"/resume":   "pick an earlier conversation and carry on in it; an id skips the list",
 	"/session":  "this session's id, for resuming later",
 	"/cost":     "what this chat has spent so far",
 	"/exit":     "leave; the session keeps its id",
@@ -492,7 +500,7 @@ var helpGroups = []struct {
 	cmds  []string
 }{
 	{"change what runs", []string{"/settings", "/autonomy"}},
-	{"this conversation", []string{"/new", "/session", "/cost", "/exit"}},
+	{"this conversation", []string{"/new", "/resume", "/session", "/cost", "/exit"}},
 	{"anything, by path", []string{"/config", "/help"}},
 }
 
@@ -674,6 +682,7 @@ func shortModel(m string) string {
 var commandArgs = map[string]string{
 	"/autonomy": " 0-100",
 	"/config":   " <path> [value]",
+	"/resume":   " [id]",
 }
 
 // commands are the slash commands offered in chat, in the order they
@@ -683,7 +692,7 @@ var commandArgs = map[string]string{
 // command that silently picks the tier (/effort meant the workers) was the
 // thing people misread. /settings shows every tier's knobs under its tier;
 // /config names the tier in the path.
-var commands = []string{"/autonomy", "/config", "/cost", "/exit", "/help", "/new", "/session", "/settings"}
+var commands = []string{"/autonomy", "/config", "/cost", "/exit", "/help", "/new", "/resume", "/session", "/settings"}
 
 func matching(candidates []string, prefix string) []string {
 	if prefix == "" {
@@ -792,4 +801,100 @@ func chooseSession(cfg *config.Config, pick bool) (string, bool) {
 		return "", false
 	}
 	return resumable[n-1].ID, true
+}
+
+// replayTail shows the end of a resumed conversation, so picking a session
+// up is visible and not only loaded.
+func replayTail(sc *screen, transcript string) {
+	msgs, err := worker.RecentMessages(transcript, 40)
+	if err != nil || len(msgs) == 0 {
+		return
+	}
+	sc.Print("")
+	sc.Printf("%s─ earlier in this conversation ─%s", ansiFaint, ansiReset)
+	for _, m := range msgs {
+		sc.Print("")
+		if m.Role == "user" {
+			sc.Print(ansiGreen + "› " + ansiReset + ansiBold + firstLines(m.Text, 6, 600) + ansiReset)
+			continue
+		}
+		sc.Print(ansiDim + firstLines(m.Text, 8, 800) + ansiReset)
+	}
+	sc.Print("")
+	sc.Printf("%s─ picking up here ─%s", ansiFaint, ansiReset)
+}
+
+// sessionRows renders the picker's lines: when, id, cost, what it was about.
+// The current session is left out; it is the one you are already in.
+func sessionRows(list []sessions.Session, current string, now time.Time) ([]sessions.Session, []string) {
+	var rows []sessions.Session
+	var lines []string
+	for _, s := range list {
+		if !s.Resumable() || s.ID == current {
+			continue
+		}
+		about := oneLineOf(s.About, 60)
+		if about == "" {
+			about = shortDir(s.Dir)
+		}
+		rows = append(rows, s)
+		lines = append(lines, fmt.Sprintf("%-9s %-9s $%-7.2f %s", sessions.Age(s.Ended, now), s.ID[:8], s.CostUSD, about))
+	}
+	return rows, lines
+}
+
+// pickSessionOn takes over the viewport with the recent sessions: up and
+// down move, enter resumes, esc closes.
+func pickSessionOn(sc *screen, keys *keyReader, cfg *config.Config, current string) (string, bool) {
+	list, err := sessions.List(runsDir(cfg), 20, enrichSession)
+	if err != nil {
+		sc.Printf("%s%v%s", ansiDim, err, ansiReset)
+		return "", false
+	}
+	rows, lines := sessionRows(list, current, time.Now())
+	if len(rows) == 0 {
+		sc.Print(ansiDim + "no earlier session to resume" + ansiReset)
+		return "", false
+	}
+	sel := 0
+	defer sc.Overlay(nil)
+	for {
+		out := make([]string, 0, len(lines)+2)
+		out = append(out, "  "+ansiFaint+"resume which conversation?"+ansiReset, "")
+		for i, l := range lines {
+			if i == sel {
+				out = append(out, "  "+ansiGreen+"› "+l+ansiReset)
+			} else {
+				out = append(out, "    "+ansiDim+l+ansiReset)
+			}
+		}
+		if h := sc.ViewHeight(); len(out) > h && h > 3 {
+			start := sel + 2 - h/2
+			if start < 0 {
+				start = 0
+			}
+			if start+h > len(out) {
+				start = len(out) - h
+			}
+			out = out[start : start+h]
+		}
+		sc.Overlay(out)
+		sc.SetPrompt("", "", "  ↑↓ move · enter resume · esc close", "roscoe chat --resume "+rows[sel].ID+" does the same from the shell")
+		switch keys.NextKey() {
+		case "up":
+			if sel > 0 {
+				sel--
+			}
+		case "down":
+			if sel < len(rows)-1 {
+				sel++
+			}
+		case "enter":
+			sc.SetPrompt("", "", "", "")
+			return rows[sel].ID, true
+		case "esc", "ctrl-c", "eof", "q":
+			sc.SetPrompt("", "", "", "")
+			return "", false
+		}
+	}
 }

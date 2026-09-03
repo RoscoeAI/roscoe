@@ -47,12 +47,20 @@ func realMain() int {
 
 	args := flag.Args()
 	if len(args) == 0 {
+		// The front door: at a terminal, roscoe alone is the chat. A script
+		// that forgot the command still gets usage.
+		if isTTY(os.Stdin) {
+			return cmdChat(ctx, *cfgPath, nil)
+		}
 		usage()
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
 
 	switch cmd {
+	case "help", "-h", "--help":
+		usage()
+		return 0
 	case "version":
 		return cmdVersion()
 	case "init":
@@ -107,7 +115,8 @@ func realMain() int {
 func usage() {
 	fmt.Fprint(os.Stderr, `roscoe — a fleet orchestrator for Claude Code
 
-usage: roscoe [--config <path>] <command> [args]
+usage: roscoe                                   open the chat (the same as roscoe chat)
+       roscoe [--config <path>] <command> [args]
 
 commands:
   init                                    write a default roscoe.json (refuses to overwrite)
@@ -120,7 +129,7 @@ commands:
                                           up to limits.max_parallel_tasks;
                                           esc interrupts + lets you type a redirect;
                                           --resume migrates + continues an existing claude session
-  chat [--dir D] [--resume <session-id>]  hold a conversation with one worker
+  chat [--dir D] [--resume <session-id>]  hold a conversation with one worker; /resume inside picks an earlier one
   loop "<charter>" [--max-iterations N] [--budget USD] [--dir D] [--once]
                                           work a charter to completion: dispatch,
                                           read loop.md, judge, dispatch again;

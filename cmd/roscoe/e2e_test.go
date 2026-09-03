@@ -122,6 +122,10 @@ answer="fake answer to: $short"
 if [ -n "$FAKE_CLAUDE_RESULT_FILE" ] && [ -f "$FAKE_CLAUDE_RESULT_FILE" ]; then
   answer=$(tr -d '"\\' < "$FAKE_CLAUDE_RESULT_FILE" | awk '{printf "%s\\n", $0}')
 fi
+# A transcript, as claude keeps one, so a session can be found and resumed.
+tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/-fake"; mkdir -p "$tdir"
+printf '{"type":"user","sessionId":"%s","message":{"role":"user","content":"%s"}}\n' "$sid" "$short" >> "$tdir/$sid.jsonl"
+printf '{"type":"assistant","sessionId":"%s","message":{"role":"assistant","content":[{"type":"text","text":"fake answer to: %s"}]}}\n' "$sid" "$short" >> "$tdir/$sid.jsonl"
 echo "start $short" >> "$FAKE_CLAUDE_EVENTS"
 printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools":["Read","Bash"]}\n' "$sid" "$model"
 [ -n "$FAKE_CLAUDE_WARM_DELAY" ] && sleep "$FAKE_CLAUDE_WARM_DELAY"
@@ -245,10 +249,71 @@ func plain(s string) string { return ansi.ReplaceAllString(s, "") }
 
 // --- the surface -----------------------------------------------------------
 
+// Without a terminal, bare roscoe is a script that forgot its command.
 func TestE2ENoArgsPrintsUsage(t *testing.T) {
 	w := newWorld(t)
-	expect(t, w.run(""), 2, "usage: roscoe [--config <path>] <command>")
+	expect(t, w.run(""), 2, "roscoe [--config <path>] <command>", "open the chat")
 	expect(t, w.run("", "bogus"), 2, `unknown command "bogus"`)
+	expect(t, w.run("", "help"), 0, "commands:")
+	expect(t, w.run("", "--help"), 0, "commands:")
+}
+
+// At a terminal, bare roscoe is the chat.
+func TestE2EBareRoscoeOpensChat(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{
+		{expect: "› ", send: "/exit\r"},
+		{expect: "bye"},
+	})
+	expect(t, r, 0, "roscoe chat: bye")
+	if strings.Contains(r.stdout, "commands:") {
+		t.Error("bare roscoe printed usage at a terminal")
+	}
+}
+
+// run with no prompt asks for one; ctrl-c must end that, not echo ^C.
+func TestE2ERunPromptCtrlC(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{{expect: "prompt> ", send: "\x03"}}, "run")
+	if len(w.claudeStarts()) != 0 {
+		t.Error("ctrl-c at the prompt started a worker")
+	}
+	if r.code == 0 && runtime.GOOS == "linux" { // script -e forwards the status
+		t.Errorf("exit 0 after ctrl-c:\n%s", r.stdout)
+	}
+}
+
+// /resume inside chat: pick an earlier conversation and carry on in it.
+func TestE2EChatResume(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{
+		{expect: "› ", send: "first question\r"},
+		{expect: "0.0123 USD this turn", send: "/new\r"},
+		{expect: "started a fresh session", send: "/resume\r"},
+		{expect: "resume which conversation?", send: "\r"},
+		{expect: "picking up here", send: "second question\r"},
+		{expect: "0.0123 USD this turn · 0.0246 total", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat")
+	expect(t, r, 0, "─ earlier in this conversation ─", "› first question", "resuming ")
+	starts := w.claudeStarts()
+	if len(starts) != 2 {
+		t.Fatalf("%d worker starts, want 2:\n%s", len(starts), strings.Join(starts, "\n"))
+	}
+	sid := regexp.MustCompile(`--session-id (\S+)`).FindStringSubmatch(starts[0])
+	if sid == nil || !strings.Contains(starts[1], "--resume "+sid[1]) {
+		t.Errorf("the second turn should resume the first's session:\n%s\n%s", starts[0], starts[1])
+	}
+	// With nothing else to resume, the picker says so instead of opening.
+	r = w.runPTY([]ptyStep{
+		{expect: "› ", send: "/resume nope\r"},
+		{expect: "not found", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat")
+	expect(t, r, 0, "session nope not found")
 }
 
 // Every command main dispatches must be in the usage text, or an operator
