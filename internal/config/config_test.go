@@ -847,3 +847,32 @@ func TestGetMissNamesThePathAndTheSiblings(t *testing.T) {
 		t.Errorf("error %v should list tiers.middle's keys", err)
 	}
 }
+
+// Elements with a name are addressable by it: accounts.primary, nodes.local.
+func TestArrayPathsByName(t *testing.T) {
+	c := Default()
+	got, err := c.Get("accounts.primary.token_ref")
+	if err != nil || got != "keychain:roscoe-account-primary" {
+		t.Errorf("accounts.primary.token_ref = %v, %v", got, err)
+	}
+	if got, err := c.Get("nodes.local.workers"); err != nil || fmt.Sprint(got) != "2" {
+		t.Errorf("nodes.local.workers = %v, %v", got, err)
+	}
+	if err := c.SetPath("accounts.primary.token_ref", "env:CLAUDE_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if c.Accounts[0].TokenRef != "env:CLAUDE_TOKEN" {
+		t.Errorf("set by name did not land: %+v", c.Accounts[0])
+	}
+	// Numbers still work, and a miss names the alternatives.
+	if got, _ := c.Get("accounts.0.token_ref"); got != "env:CLAUDE_TOKEN" {
+		t.Errorf("accounts.0.token_ref = %v", got)
+	}
+	_, err = c.Get("accounts.tertiary.token_ref")
+	if err == nil || !strings.Contains(err.Error(), "one of: primary, secondary, api-fallback") {
+		t.Errorf("miss = %v", err)
+	}
+	if _, err := c.Get("accounts.9.token_ref"); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("out of range = %v", err)
+	}
+}

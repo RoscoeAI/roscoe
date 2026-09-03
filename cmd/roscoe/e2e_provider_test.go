@@ -74,6 +74,18 @@ func startFakeProvider(t *testing.T) *fakeProvider {
 	}
 	mux.HandleFunc("/an/v1/messages", messages)
 	mux.HandleFunc("/di/anthropic/v1/messages", messages)
+	countTokens := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &req)
+		fp.record(r, req.Model)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"input_tokens":5}`)
+	}
+	mux.HandleFunc("/an/v1/messages/count_tokens", countTokens)
+	mux.HandleFunc("/di/anthropic/v1/messages/count_tokens", countTokens)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fp.record(r, "")
 		http.NotFound(w, r)
@@ -349,4 +361,56 @@ func TestE2ECalibrateSpend(t *testing.T) {
 		t.Fatal("the provider key leaked")
 	}
 	expect(t, w.run("", "top", "--no-fleet"), 0, "calibrated just now")
+}
+
+// smoke --full: every check green against the loopback provider and the
+// fake harness, and red where it should be when a leg is missing.
+func TestE2ESmokeFull(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	fp := startFakeProvider(t)
+	w.pointAtFake(fp)
+	// A worker credential the smoke can read on any platform: an env: ref.
+	expect(t, w.run("", "config", "set", "accounts.primary.token_ref", "env:CLAUDE_TOKEN"), 0)
+	os.WriteFile(filepath.Join(w.home, ".roscoe", ".env"), []byte("DEEP_INFRA_API_KEY=dk-test-secret\nCLAUDE_TOKEN=sk-ant-oat01-smoke\n"), 0o600)
+
+	r := w.run("", "smoke", "--full")
+	expect(t, r, 0, "✓ config-validate", "✓ env-file", "DEEP_INFRA_API_KEY present", "✓ router-start",
+		"✓ tier3-count-tokens", "✓ tier3-live-ping", "✓ anthropic-count-tokens", "account primary",
+		"✓ claude-bin", "✓ harness-probe", "pong in ")
+	if strings.Contains(r.all(), "✗") || strings.Contains(r.all(), "–") {
+		t.Errorf("a check failed or was skipped in a full smoke:\n%s", r.stdout)
+	}
+	// The Anthropic leg was signed with the worker's token, not the tier-3 key.
+	an, ok := fp.find("/an/v1/messages/count_tokens")
+	if !ok || an.Auth != "Bearer sk-ant-oat01-smoke" {
+		t.Errorf("anthropic count_tokens call = %+v, %v", an, ok)
+	}
+	if di, ok := fp.find("/di/anthropic/v1/messages/count_tokens"); !ok || di.Auth != "Bearer dk-test-secret" || di.Model != "zai-org/GLM-5.3-Flash" {
+		t.Errorf("tier3 count_tokens call = %+v, %v", di, ok)
+	}
+	// The harness probe ran the fake claude against the router.
+	probe := ""
+	for _, st := range w.claudeStarts() {
+		if strings.Contains(st, "--output-format json") {
+			probe = st
+		}
+	}
+	if probe == "" || !strings.Contains(probe, "--model roscoe/tier3") || !strings.Contains(probe, "Reply with exactly: pong") {
+		t.Errorf("harness probe argv = %q", probe)
+	}
+	for _, secret := range []string{"sk-ant-oat01-smoke", "dk-test-secret"} {
+		if strings.Contains(r.all(), secret) {
+			t.Fatalf("%s reached the smoke output", secret)
+		}
+	}
+
+	// Tier 3 unreachable: its checks go red with the reason, the rest stay
+	// green, and the command exits 1.
+	expect(t, w.run("", "config", "set", "providers.deepinfra.base_url", "http://127.0.0.1:1/anthropic"), 0)
+	r = w.run("", "smoke", "--full")
+	expect(t, r, 1, "✗ tier3-count-tokens", "✗ tier3-live-ping", "✓ anthropic-count-tokens", "✓ claude-bin")
+	if !regexp.MustCompile(`tier3-live-ping\s+status 502`).MatchString(r.stdout) {
+		t.Errorf("unreachable tier 3 should surface as a 502 from the router:\n%s", r.stdout)
+	}
 }

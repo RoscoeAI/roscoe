@@ -105,12 +105,13 @@ if [ "$FAKE_CLAUDE_MODE" = "fail" ]; then
   echo '{"type":"error","error":{"type":"invalid_request_error","message":"fake"}}' >&2
   exit 1
 fi
-prompt=""; sid="fake-session"; model="claude-sonnet-5"; last=""; resumed=""
+prompt=""; sid="fake-session"; model="claude-sonnet-5"; last=""; resumed=""; fmt=stream-json
 for a in "$@"; do
   case "$last" in
     -p) prompt="$a";;
     --session-id) sid="$a";;
     --resume) sid="$a"; resumed=1;;
+    --output-format) fmt="$a";;
   esac
   last="$a"
 done
@@ -135,6 +136,11 @@ tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/-fake"; mkdir -p "$tdir"
 printf '{"type":"user","sessionId":"%s","message":{"role":"user","content":"%s"}}\n' "$sid" "$short" >> "$tdir/$sid.jsonl"
 printf '{"type":"assistant","sessionId":"%s","message":{"role":"assistant","content":[{"type":"text","text":"fake answer to: %s"}]}}\n' "$sid" "$short" >> "$tdir/$sid.jsonl"
 echo "start $short" >> "$FAKE_CLAUDE_EVENTS"
+if [ "$fmt" = json ]; then
+  # --output-format json: one result object and nothing else.
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"pong","session_id":"%s","total_cost_usd":0.001,"num_turns":1}\n' "$sid"
+  exit 0
+fi
 printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools":["Read","Bash"]}\n' "$sid" "$model"
 # Interruptible: an interrupted worker must die promptly, as claude does.
 trap 'exit 130' INT TERM

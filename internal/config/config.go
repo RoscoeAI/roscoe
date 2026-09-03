@@ -352,12 +352,9 @@ func (c *Config) SetPath(dotted string, raw string) error {
 	case map[string]any:
 		container[last] = val
 	case []any:
-		i, err := strconv.Atoi(last)
+		i, err := arrayIndex(container, last, dotted)
 		if err != nil {
-			return fmt.Errorf("%q: array index must be a number", dotted)
-		}
-		if i < 0 || i >= len(container) {
-			return fmt.Errorf("%q: index %d out of range (len %d)", dotted, i, len(container))
+			return err
 		}
 		container[i] = val
 	default:
@@ -463,12 +460,9 @@ func step(cur any, seg, sofar, full string) (any, error) {
 		}
 		return val, nil
 	case []any:
-		i, err := strconv.Atoi(seg)
+		i, err := arrayIndex(v, seg, sofar)
 		if err != nil {
-			return nil, fmt.Errorf("%q: array index must be a number", sofar)
-		}
-		if i < 0 || i >= len(v) {
-			return nil, fmt.Errorf("%q: index %d out of range (len %d)", sofar, i, len(v))
+			return nil, err
 		}
 		return v[i], nil
 	default:
@@ -710,4 +704,36 @@ func (c *Config) ChildPaths(prefix string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// arrayIndex resolves one path segment against an array: a number, or the
+// name of an element that has one. Nobody thinks of their primary account
+// as accounts.0, so accounts.primary.token_ref and nodes.studio.ssh work,
+// and a miss lists the names that would have.
+func arrayIndex(v []any, seg, sofar string) (int, error) {
+	if i, err := strconv.Atoi(seg); err == nil {
+		if i < 0 || i >= len(v) {
+			return 0, fmt.Errorf("%q: index %d out of range (len %d)", sofar, i, len(v))
+		}
+		return i, nil
+	}
+	var names []string
+	for i, el := range v {
+		m, ok := el.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if name == "" {
+			continue
+		}
+		if name == seg {
+			return i, nil
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return 0, fmt.Errorf("%q: array index must be a number", sofar)
+	}
+	return 0, fmt.Errorf("%q: array index must be a number or one of: %s", sofar, strings.Join(names, ", "))
 }
