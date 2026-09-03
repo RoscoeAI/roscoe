@@ -389,7 +389,7 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		}
 		limit, why := poolWidth(cfg, calib, stale, accts.slots(), 1+len(more))
 		_ = account
-		return runMany(ctx, os.Stderr, append([]string{prompt}, more...), *taskID, limit, accts.describe()+" · "+why, workerTask(cfg, addr, accts, *dir))
+		return runMany(ctx, os.Stderr, os.Stdout, append([]string{prompt}, more...), *taskID, limit, accts.describe()+" · "+why, workerTask(cfg, addr, accts, *dir))
 	}
 	fmt.Fprintf(os.Stderr, "[task] %s dir=%s\n", *taskID, *dir)
 

@@ -38,13 +38,18 @@ func TestMain(m *testing.M) {
 
 // world is one isolated operator: a home, an empty cwd, fake tools.
 type world struct {
-	t       *testing.T
-	home    string
-	cwd     string
-	bin     string
-	kcDir   string // the fake keychain's store
-	sshLog  string // touched whenever the fake ssh is called
-	cfgPath string
+	t      *testing.T
+	home   string
+	cwd    string
+	bin    string
+	kcDir  string // the fake keychain's store
+	sshLog string // touched whenever the fake ssh is called
+	// claudeLog gets one line per fake claude start (its argv); claudeMode
+	// "fail" makes the fake die like a refused request.
+	claudeLog  string
+	claudeMode string
+	warmDelay  string // seconds the fake waits before its first assistant event
+	cfgPath    string
 }
 
 func newWorld(t *testing.T) *world {
@@ -58,18 +63,40 @@ func newWorld(t *testing.T) *world {
 		kcDir:  filepath.Join(root, "kc"),
 		sshLog: filepath.Join(root, "ssh-called"),
 	}
+	w.claudeLog = filepath.Join(root, "claude-argv")
 	for _, d := range []string{w.home, w.cwd, w.bin, w.kcDir, filepath.Join(w.home, ".roscoe")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	w.fake("claude", `#!/bin/sh
+# A stand-in worker. It records every argv line it was started with, then
+# speaks stream-json the way claude -p --output-format stream-json does: an
+# init, one assistant turn, a result with usage. FAKE_CLAUDE_MODE=fail makes
+# it die the way a refused request does.
+echo "$@" >> "$FAKE_CLAUDE_LOG"
 case "$1" in
   --version) echo "2.1.259 (Claude Code)"; exit 0;;
 esac
-# A worker probe: fail fast, the way a refused request does.
-echo '{"type":"error","error":{"type":"invalid_request_error","message":"fake"}}' >&2
-exit 1
+if [ "$FAKE_CLAUDE_MODE" = "fail" ]; then
+  echo '{"type":"error","error":{"type":"invalid_request_error","message":"fake"}}' >&2
+  exit 1
+fi
+prompt=""; sid="fake-session"; model="claude-sonnet-5"; last=""
+for a in "$@"; do
+  case "$last" in
+    -p) prompt="$a";;
+    --session-id|--resume) sid="$a";;
+  esac
+  last="$a"
+done
+echo "start $prompt" >> "$FAKE_CLAUDE_EVENTS"
+printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools":["Read","Bash"]}\n' "$sid" "$model"
+[ -n "$FAKE_CLAUDE_WARM_DELAY" ] && sleep "$FAKE_CLAUDE_WARM_DELAY"
+echo "assistant $prompt" >> "$FAKE_CLAUDE_EVENTS"
+printf '{"type":"assistant","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"fake answer to: %s"}],"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30}},"session_id":"%s"}\n' "$model" "$prompt" "$sid"
+printf '{"type":"result","subtype":"success","is_error":false,"result":"fake answer to: %s","session_id":"%s","total_cost_usd":0.0123,"num_turns":1,"duration_ms":420,"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30},"modelUsage":{"%s":{"inputTokens":1200,"outputTokens":30,"cacheReadInputTokens":40000,"cacheCreationInputTokens":0,"costUSD":0.0123,"contextWindow":200000}}}\n' "$prompt" "$sid" "$model"
+exit 0
 `)
 	w.fake("ssh", `#!/bin/sh
 echo "$@" >> "$ROSCOE_E2E_SSH_LOG"
@@ -150,6 +177,10 @@ func (w *world) run(stdin string, args ...string) result {
 		"PATH=" + w.bin + ":" + system,
 		"FAKE_KC=" + w.kcDir,
 		"ROSCOE_E2E_SSH_LOG=" + w.sshLog,
+		"FAKE_CLAUDE_LOG=" + w.claudeLog,
+		"FAKE_CLAUDE_MODE=" + w.claudeMode,
+		"FAKE_CLAUDE_EVENTS=" + w.claudeLog + ".events",
+		"FAKE_CLAUDE_WARM_DELAY=" + w.warmDelay,
 		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
 		"TERM=dumb",
 		"NO_COLOR=1",
@@ -456,4 +487,147 @@ func TestE2ECalibrateThenTop(t *testing.T) {
 func readFile(p string) string {
 	b, _ := os.ReadFile(p)
 	return string(b)
+}
+
+// claudeStarts returns the argv of every worker the fake claude saw, one
+// per start, excluding version probes.
+func (w *world) claudeStarts() []string {
+	var out []string
+	for _, l := range strings.Split(readFile(w.claudeLog), "\n") {
+		if l != "" && l != "--version" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// claudeEvents is the fake's own account of the order things happened in:
+// "start <prompt>" when a worker began, "assistant <prompt>" when it produced
+// its first response, across every worker.
+func (w *world) claudeEvents() []string {
+	var out []string
+	for _, l := range strings.Split(readFile(w.claudeLog+".events"), "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func TestE2ERunOne(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.run("", "run", "say hi", "--task-id", "t-1")
+	expect(t, r, 0, "[task] t-1", "[init] model=claude-sonnet-5", "[result] success cost=$0.0123", "[done] cost=$0.0123")
+	if strings.TrimSpace(r.stdout) != "fake answer to: say hi" {
+		t.Errorf("stdout should be the answer alone, got %q", r.stdout)
+	}
+	if strings.Contains(r.all(), "[account] ") && !strings.Contains(r.all(), "roscoe accounts explains") {
+		t.Errorf("the account line does not say where to learn more:\n%s", r.stderr)
+	}
+	starts := w.claudeStarts()
+	if len(starts) != 1 {
+		t.Fatalf("claude started %d times, want 1:\n%s", len(starts), strings.Join(starts, "\n"))
+	}
+	argv := starts[0]
+	for _, want := range []string{"-p say hi ", "--output-format stream-json", "--model sonnet", "--permission-mode bypassPermissions",
+		"--strict-mcp-config", "--exclude-dynamic-system-prompt-sections", "--session-id ", "--max-budget-usd 8"} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("worker argv lacks %q:\n%s", want, argv)
+		}
+	}
+	if strings.Contains(argv, "--resume") {
+		t.Error("a fresh run passed --resume")
+	}
+
+	// The settings reach the worker: effort, lean, model, budget.
+	expect(t, w.run("", "config", "set", "tiers.middle.effort", "high"), 0)
+	expect(t, w.run("", "config", "set", "tiers.middle.lean_context", "false"), 0)
+	expect(t, w.run("", "config", "set", "tiers.middle.model", "opus"), 0)
+	expect(t, w.run("", "run", "again"), 0)
+	argv = w.claudeStarts()[1]
+	if !strings.Contains(argv, "--effort high") || !strings.Contains(argv, "--model opus") {
+		t.Errorf("effort/model changes did not reach the worker:\n%s", argv)
+	}
+	if strings.Contains(argv, "--strict-mcp-config") {
+		t.Errorf("lean off, but the worker still has the strict flag:\n%s", argv)
+	}
+	if w.sshCalled() {
+		t.Error("a local run reached for ssh")
+	}
+}
+
+func TestE2ERunOneFails(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.claudeMode = "fail"
+	r := w.run("", "run", "doomed")
+	if r.code == 0 {
+		t.Errorf("a worker that died still exited 0:\n%s", r)
+	}
+	expect(t, r, r.code, "claude failed without result", "invalid_request_error")
+}
+
+// Several prompts share one pool: the first runs alone until it is warm
+// (its first assistant event), then the rest start, up to the limit.
+func TestE2ERunManyPool(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.warmDelay = "0.4"
+	r := w.run("", "run", "a", "b", "c")
+	expect(t, r, 0, "[tasks] 3 prompts · 3 at a time", "the first warms the prompt cache",
+		"done · $0.0123 · fake answer to: a", "done · $0.0123 · fake answer to: b", "done · $0.0123 · fake answer to: c",
+		"[tasks] 3 done, 0 failed · $0.0369")
+	for _, p := range []string{"a", "b", "c"} {
+		if !strings.Contains(r.stdout, "fake answer to: "+p) {
+			t.Errorf("stdout lacks the answer to %q:\n%s", p, r.stdout)
+		}
+	}
+	ev := w.claudeEvents()
+	if len(ev) != 6 {
+		t.Fatalf("fake saw %d events, want 6: %v", len(ev), ev)
+	}
+	if ev[0] != "start a" || ev[1] != "assistant a" {
+		t.Errorf("the first prompt did not run alone until warm: %v", ev)
+	}
+	if strings.HasPrefix(ev[1], "start") {
+		t.Errorf("a second worker started before the first was warm: %v", ev)
+	}
+
+	// The limit is honoured and stated.
+	expect(t, w.run("", "config", "set", "limits.max_parallel_tasks", "2"), 0)
+	r = w.run("", "run", "d", "e", "f")
+	expect(t, r, 0, "[tasks] 3 prompts · 2 at a time", "[tasks] 3 done, 0 failed")
+}
+
+func TestE2ERunManyFailures(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	w.claudeMode = "fail"
+	r := w.run("", "run", "a", "b")
+	if r.code == 0 {
+		t.Errorf("every worker failed, exit 0:\n%s", r)
+	}
+	expect(t, r, r.code, "[tasks] 0 done, 2 failed", "claude failed without result")
+}
+
+func TestE2ESessionsAndTopAfterRuns(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	expect(t, w.run("", "run", "one"), 0)
+	expect(t, w.run("", "run", "two", "three"), 0)
+
+	r := w.run("", "sessions")
+	expect(t, r, 0, "when", "session", "cost", "turns", "$0.01", "resume one:")
+	rows := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if n := strings.Count(r.stdout, "just now"); n != 3 {
+		t.Errorf("want 3 session rows, got %d:\n%s", n, r.stdout)
+	}
+	_ = rows
+	r = w.run("", "sessions", "--limit", "1")
+	if n := strings.Count(r.stdout, "just now"); n != 1 {
+		t.Errorf("--limit 1 showed %d rows:\n%s", n, r.stdout)
+	}
+	// top sums the same ledgers: three runs, one turn each, $0.0369.
+	expect(t, w.run("", "top", "--no-fleet"), 0, "today     $0.04 · 3 runs · 3 turns", "week      $0.04 · 3 runs · 3 turns", "just now")
 }

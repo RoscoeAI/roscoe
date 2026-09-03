@@ -41,7 +41,7 @@ func TestRunManyReportsEveryTask(t *testing.T) {
 		return &streamjson.ResultEvent{Result: "answer to " + tk.Prompt, TotalCostUSD: 0.01}, nil
 	}
 	var out bytes.Buffer
-	code := runMany(context.Background(), &out, []string{"one", "two", "boom", "refused", "five"}, "task-x", 2, "2 account(s): a, b · 1 each at once", fake)
+	code := runMany(context.Background(), &out, &out, []string{"one", "two", "boom", "refused", "five"}, "task-x", 2, "2 account(s): a, b · 1 each at once", fake)
 	text := out.String()
 	if code != 1 {
 		t.Errorf("exit %d with two failures", code)

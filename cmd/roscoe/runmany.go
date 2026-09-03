@@ -38,7 +38,11 @@ func taskIDs(base string, n int) []string {
 // wrote instead of writing their own. Each task gets its own worker and its
 // own ledger. Streams are not interleaved; each task gets a start line, a
 // done line, and its answer printed under its id at the end.
-func runMany(ctx context.Context, out io.Writer, prompts []string, base string, limit int, who string, run oneTask) int {
+//
+// Progress goes to out (stderr, like a single run's [task] lines); the
+// answers go to answers (stdout), so `roscoe run "a" "b" > out.txt` captures
+// exactly what a single run would.
+func runMany(ctx context.Context, out, answers io.Writer, prompts []string, base string, limit int, who string, run oneTask) int {
 	w := &lockedWriter{w: out} // tasks report from their own goroutines
 	ids := taskIDs(base, len(prompts))
 	tasks := make([]pool.Task, len(prompts))
@@ -69,21 +73,21 @@ func runMany(ctx context.Context, out io.Writer, prompts []string, base string, 
 	failed := 0
 	var total float64
 	for i, r := range results {
-		fmt.Fprintf(w, "\n%s · %s\n", r.Task.ID, oneLineOf(prompts[i], 70))
+		fmt.Fprintf(answers, "\n%s · %s\n", r.Task.ID, oneLineOf(prompts[i], 70))
 		switch {
 		case r.Err != nil:
 			failed++
-			fmt.Fprintf(w, "  error: %v\n", r.Err)
+			fmt.Fprintf(answers, "  error: %v\n", r.Err)
 		case r.Value == nil:
 			failed++
-			fmt.Fprintln(w, "  no result")
+			fmt.Fprintln(answers, "  no result")
 		default:
 			if r.Value.IsError {
 				failed++
 			}
 			total += r.Value.TotalCostUSD
 			for _, line := range strings.Split(strings.TrimSpace(r.Value.Result), "\n") {
-				fmt.Fprintf(w, "  %s\n", line)
+				fmt.Fprintf(answers, "  %s\n", line)
 			}
 		}
 	}
