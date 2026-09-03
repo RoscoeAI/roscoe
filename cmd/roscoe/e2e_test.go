@@ -1130,3 +1130,49 @@ func TestE2EChatSession(t *testing.T) {
 		t.Errorf("want one session row:\n%s", sess.stdout)
 	}
 }
+
+// /config inside chat: the list, a branch, a leaf's card, a set that lands
+// in the file, and the errors for a bad path.
+func TestE2EChatConfig(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{
+		{expect: "› ", send: "/config\r"},
+		{expect: "/config <key> opens one", send: "/config tiers.middle\r"},
+		{expect: "/config tiers.middle.<name> shows one", send: "/config tiers.middle.effort\r"},
+		{expect: "set it", send: "/config tiers.middle.effort high\r"},
+		{expect: "tiers.middle.effort = high", send: "/config no.such.path 1\r"},
+		{expect: "no such key", send: "/config tiers.middle.effort turbo\r"},
+		{expect: `"turbo" is not one of`, send: "/autonomy\r"},
+		{expect: "autonomy.level = ", send: "/autonomy 75\r"},
+		{expect: "autonomy.level = 75", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat")
+	expect(t, r, 0, "tiers", "autonomy", "options", "ultracode")
+	// What chat said it saved is what the file holds.
+	expect(t, w.run("", "config", "get", "tiers.middle.effort"), 0, "high")
+	expect(t, w.run("", "config", "get", "autonomy.level"), 0, "75")
+	if len(w.claudeStarts()) != 0 {
+		t.Error("configuring started a worker")
+	}
+}
+
+// /settings: the panel opens with every tier, the arrows change a value,
+// and the change is saved before the panel closes.
+func TestE2EChatSettingsPanel(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	const down, left, esc = "\x1b[B", "\x1b[D", "\x1b"
+	r := w.runPTY([]ptyStep{
+		{expect: "› ", send: "/settings\r"},
+		{expect: "tier 3", send: down + down}, // model → provider → effort, tier 1
+		{expect: "tiers.main.effort:", send: left},
+		{expect: "effort     max", send: esc},
+		{expect: "› ", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat")
+	expect(t, r, 0, "tier 1   your session", "tier 2   workers", "tier 3   the swarm", "fleet", "↑↓ move · ←→ change")
+	// Tier 1's effort defaults to ultracode, the end of the list; one step
+	// left is max, shown on the row and saved to the file.
+	expect(t, w.run("", "config", "get", "tiers.main.effort"), 0, "max")
+}

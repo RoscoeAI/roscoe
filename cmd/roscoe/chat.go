@@ -247,12 +247,7 @@ func cmdChat(ctx context.Context, explicit string, args []string) int {
 				}
 				continue
 			}
-			value := strings.Join(parts[1:], " ")
-			if sErr := cfg.SetPath(parts[0], value); sErr != nil {
-				sc.Printf("%s%v%s", ansiDim, sErr, ansiReset)
-				continue
-			}
-			persist(sc, explicit, parts[0], value)
+			setConfigInChat(sc, cfg, explicit, parts[0], strings.Join(parts[1:], " "))
 			continue
 		case strings.HasPrefix(msg, "/autonomy"):
 			arg := strings.TrimSpace(strings.TrimPrefix(msg, "/autonomy"))
@@ -897,4 +892,25 @@ func pickSessionOn(sc *screen, keys *keyReader, cfg *config.Config, current stri
 			return "", false
 		}
 	}
+}
+
+// setConfigInChat applies one /config change: set in memory, validate, and
+// only then write the file. A value that parses but is not allowed (an
+// effort that is not a level, say) is put back and reported, because one
+// mistyped word once made every later command refuse to load the config.
+func setConfigInChat(sc *screen, cfg *config.Config, explicit, path, value string) bool {
+	old, hadOld := cfg.Get(path)
+	if err := cfg.SetPath(path, value); err != nil {
+		sc.Printf("%s%v%s", ansiDim, err, ansiReset)
+		return false
+	}
+	if errs := cfg.Validate(); len(errs) > 0 {
+		if hadOld == nil {
+			_ = cfg.SetPath(path, fmt.Sprintf("%v", old))
+		}
+		sc.Printf("%s%v%s", ansiDim, errs[0], ansiReset)
+		return false
+	}
+	persist(sc, explicit, path, value)
+	return true
 }

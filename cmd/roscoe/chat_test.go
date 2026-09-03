@@ -1,10 +1,14 @@
 package main
 
 import (
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"roscoe.sh/roscoe/internal/config"
 	"roscoe.sh/roscoe/internal/sessions"
 )
 
@@ -51,5 +55,38 @@ func TestResumeIsAFirstClassCommand(t *testing.T) {
 	}
 	if !found {
 		t.Error("/resume is not under \"this conversation\" in /help")
+	}
+}
+
+// A /config value that parses but fails validation must not reach the file
+// or stay in memory: the file is what every later command loads.
+func TestSetConfigInChatValidatesBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "roscoe.json")
+	cfg := config.Default()
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	sc := &screen{rows: 24, cols: 80, liveStart: -1, out: io.Discard}
+
+	if setConfigInChat(sc, cfg, path, "tiers.middle.effort", "turbo") {
+		t.Error("an effort that is not a level was accepted")
+	}
+	if got, _ := cfg.Get("tiers.middle.effort"); got == "turbo" {
+		t.Error("the bad value stayed in memory")
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("the file no longer loads: %v", err)
+	}
+	if !setConfigInChat(sc, cfg, path, "tiers.middle.effort", "high") {
+		t.Error("a valid effort was refused")
+	}
+	saved, err := config.Load(path)
+	if err != nil || saved.Tiers.Middle.Effort != "high" {
+		t.Errorf("file has effort %q, err %v", saved.Tiers.Middle.Effort, err)
+	}
+	b, _ := os.ReadFile(path)
+	if strings.Contains(string(b), "turbo") {
+		t.Error("turbo reached the file")
 	}
 }
