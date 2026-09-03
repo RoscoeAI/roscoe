@@ -191,21 +191,7 @@ func (w *world) run(stdin string, args ...string) result {
 	w.t.Helper()
 	cmd := exec.Command(roscoeBin, args...)
 	cmd.Dir = w.cwd
-	system := "/usr/bin:/bin:/usr/sbin:/sbin"
-	cmd.Env = []string{
-		"HOME=" + w.home,
-		"PATH=" + w.bin + ":" + system,
-		"FAKE_KC=" + w.kcDir,
-		"ROSCOE_E2E_SSH_LOG=" + w.sshLog,
-		"FAKE_CLAUDE_LOG=" + w.claudeLog,
-		"FAKE_CLAUDE_MODE=" + w.claudeMode,
-		"FAKE_CLAUDE_EVENTS=" + w.claudeLog + ".events",
-		"FAKE_CLAUDE_WARM_DELAY=" + w.warmDelay,
-		"FAKE_CLAUDE_RESULT_FILE=" + w.resultFile,
-		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
-		"TERM=dumb",
-		"NO_COLOR=1",
-	}
+	cmd.Env = w.env()
 	if runtime.GOOS == "windows" {
 		w.t.Skip("posix shell fakes")
 	}
@@ -863,5 +849,24 @@ func TestE2ELoopStopsAfterRepeatedFailures(t *testing.T) {
 	md := readFile(filepath.Join(w.cwd, "loop.md"))
 	if !strings.Contains(md, "## Status\ncontinuing") {
 		t.Errorf("loop.md after failures:\n%s", md)
+	}
+}
+
+// env is the isolated environment every spawned roscoe gets.
+func (w *world) env() []string {
+	system := "/usr/bin:/bin:/usr/sbin:/sbin"
+	return []string{
+		"HOME=" + w.home,
+		"PATH=" + w.bin + ":" + system,
+		"FAKE_KC=" + w.kcDir,
+		"ROSCOE_E2E_SSH_LOG=" + w.sshLog,
+		"FAKE_CLAUDE_LOG=" + w.claudeLog,
+		"FAKE_CLAUDE_MODE=" + w.claudeMode,
+		"FAKE_CLAUDE_EVENTS=" + w.claudeLog + ".events",
+		"FAKE_CLAUDE_WARM_DELAY=" + w.warmDelay,
+		"FAKE_CLAUDE_RESULT_FILE=" + w.resultFile,
+		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
+		"TERM=dumb",
+		"NO_COLOR=1",
 	}
 }
