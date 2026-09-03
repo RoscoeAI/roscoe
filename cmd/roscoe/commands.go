@@ -311,17 +311,6 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 		fmt.Fprintln(os.Stderr, "roscoe run: --resume and --node do not combine; the session's transcript is on this machine")
 		return 2
 	}
-	resumeFrom := ""
-	if *resume != "" {
-		src, err := worker.FindSession(*fromConfig, *resume)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "roscoe run: %v\n", err)
-			return 1
-		}
-		resumeFrom = src
-		fmt.Fprintf(os.Stderr, "[migrate] importing session %s from %s\n", *resume, src)
-	}
-
 	cfg, env, _, err := loadConfigAndEnv(explicit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "roscoe run: %v\n", err)
@@ -329,6 +318,22 @@ func cmdRun(ctx context.Context, explicit string, args []string) int {
 	}
 	if *harness != "" {
 		cfg.Tiers.Middle.Harness = *harness
+	}
+	// The harness is known now, so say "codex cannot resume" before going
+	// looking for a claude session that would not be used anyway.
+	resumeFrom := ""
+	if *resume != "" {
+		if cfg.Tiers.Middle.Harness == "codex" {
+			fmt.Fprintln(os.Stderr, "roscoe run: --resume is not supported for the codex harness yet; it needs a claude session")
+			return 2
+		}
+		src, err := worker.FindSession(*fromConfig, *resume)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "roscoe run: %v\n", err)
+			return 1
+		}
+		resumeFrom = src
+		fmt.Fprintf(os.Stderr, "[migrate] importing session %s from %s\n", *resume, src)
 	}
 
 	if *taskID == "" {

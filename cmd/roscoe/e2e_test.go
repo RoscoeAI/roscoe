@@ -1271,3 +1271,22 @@ func TestE2EChatLastAndPick(t *testing.T) {
 		t.Errorf("%d worker starts; resuming and exiting should start none", n)
 	}
 }
+
+// runEnv is run with extra environment variables for the fakes.
+func (w *world) runEnv(extra []string, args ...string) result {
+	w.t.Helper()
+	cmd := exec.Command(roscoeBin, args...)
+	cmd.Dir = w.cwd
+	cmd.Env = append(w.env(), extra...)
+	cmd.Stdin = strings.NewReader("")
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		w.t.Fatalf("exec %v: %v", args, err)
+	}
+	return result{code: code, stdout: out.String(), stderr: errb.String()}
+}

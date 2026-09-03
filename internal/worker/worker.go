@@ -164,7 +164,14 @@ func Run(ctx context.Context, t Task, o Opts) (*streamjson.ResultEvent, error) {
 		if bin == "" {
 			bin = "codex"
 		}
-		codexLastMsg = filepath.Join(filepath.Dir(ccfgDir), "last-message.txt")
+		// Per task, and cleared first: on the own-login path the config dir
+		// is the operator's ~/.claude, and one shared last-message file there
+		// let a codex that died hand back the previous run's answer.
+		codexLastMsg = filepath.Join(config.ExpandPath(o.Cfg.StateDir), "workers", t.ID, "last-message.txt")
+		if err := os.MkdirAll(filepath.Dir(codexLastMsg), 0o755); err != nil {
+			return nil, fmt.Errorf("worker: create task dir: %w", err)
+		}
+		_ = os.Remove(codexLastMsg)
 		args = []string{"exec", "--json", "--skip-git-repo-check", "-o", codexLastMsg}
 		// tiers.middle.model was silently ignored here: no -m was ever passed,
 		// so codex ran whatever its own config named while /settings showed
