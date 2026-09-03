@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -58,5 +60,48 @@ func TestElapsed(t *testing.T) {
 		if got := elapsed(d); got != want {
 			t.Errorf("elapsed(%s) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+// The watcher must return as soon as the turn ends, with no keypress, and
+// must not have swallowed a key that arrives afterwards: that key belongs
+// to the prompt that comes back.
+func TestTurnInputReturnsWhenTheTurnEnds(t *testing.T) {
+	keys := &keyReader{events: make(chan byte, 8)}
+	sc := &screen{rows: 24, cols: 80, liveStart: -1, out: io.Discard}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan pending, 1)
+	go func() { done <- (&turnInput{}).run(ctx, sc, keys, func() {}) }()
+	time.Sleep(30 * time.Millisecond)
+	cancel() // the worker finished; nobody has typed
+	select {
+	case p := <-done:
+		if !p.empty() {
+			t.Errorf("pending = %+v, want nothing", p)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return when the turn ended; it is waiting for a keypress")
+	}
+	keys.events <- 'x'
+	if got := keys.NextKey(); got != "x" {
+		t.Errorf("the next key after the turn = %q, want x", got)
+	}
+}
+
+// Typing during the turn still queues, and enter still commits.
+func TestTurnInputQueuesWhileRunning(t *testing.T) {
+	keys := &keyReader{events: make(chan byte, 16)}
+	sc := &screen{rows: 24, cols: 80, liveStart: -1, out: io.Discard}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan pending, 1)
+	go func() { done <- (&turnInput{}).run(ctx, sc, keys, func() {}) }()
+	for _, b := range []byte("later\r") {
+		keys.events <- b
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	p := <-done
+	if p.next() != "later" {
+		t.Errorf("queued = %q", p.next())
 	}
 }

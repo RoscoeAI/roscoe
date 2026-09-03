@@ -79,10 +79,10 @@ func (t *turnInput) run(ctx context.Context, sc *screen, keys *keyReader, cancel
 				return
 			default:
 			}
-			key := keys.NextKey()
+			key := keys.NextKeyCtx(ctx)
 			t.mu.Lock()
 			switch key {
-			case "eof":
+			case "eof", "cancelled":
 				t.mu.Unlock()
 				return
 			case "paste-start":

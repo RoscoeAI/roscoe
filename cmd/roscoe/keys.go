@@ -209,6 +209,26 @@ func (k *keyReader) NextKey() string {
 	if !ok {
 		return "eof"
 	}
+	return k.decodeKey(b)
+}
+
+// NextKeyCtx is NextKey that gives up when ctx ends, returning "cancelled".
+// A watcher that reads keys only while a turn runs must not outlive the
+// turn: before this, the end of every chat turn waited for one more
+// keypress before it could print its cost line and hand the box back.
+func (k *keyReader) NextKeyCtx(ctx context.Context) string {
+	select {
+	case <-ctx.Done():
+		return "cancelled"
+	case b, ok := <-k.events:
+		if !ok {
+			return "eof"
+		}
+		return k.decodeKey(b)
+	}
+}
+
+func (k *keyReader) decodeKey(b byte) string {
 	switch {
 	case b == 0x1b:
 		return k.escapeKey()

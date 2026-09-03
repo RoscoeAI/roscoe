@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 var roscoeBin string
@@ -230,7 +233,9 @@ func expect(t *testing.T, r result, code int, needles ...string) {
 	}
 }
 
-var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
+// ansi matches every CSI sequence (colour, cursor movement, erase), and the
+// OSC title sequences, so a TUI's screen can be searched as text.
+var ansi = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\][^\x07]*\x07|\x1b[()][A-Za-z0-9]")
 
 func plain(s string) string { return ansi.ReplaceAllString(s, "") }
 
@@ -873,5 +878,155 @@ func (w *world) env() []string {
 		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
 		"TERM=dumb",
 		"NO_COLOR=1",
+	}
+}
+
+// ptyStep is one exchange with a program running under a pseudo-terminal:
+// wait until the screen so far contains expect, then type send.
+type ptyStep struct {
+	expect string
+	send   string
+}
+
+// runPTY runs the binary under a pseudo-terminal via script(1), for the
+// commands that refuse a pipe, and drives it through steps. Input is paced
+// by what the program has printed, because a pty fed everything up front
+// delivers it (and EOF) before the program has asked.
+func (w *world) runPTY(steps []ptyStep, args ...string) result {
+	w.t.Helper()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("script", append([]string{"-q", "/dev/null", roscoeBin}, args...)...)
+	case "linux":
+		quoted := make([]string, 0, len(args)+1)
+		for _, a := range append([]string{roscoeBin}, args...) {
+			quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
+		}
+		cmd = exec.Command("script", "-q", "-e", "-c", strings.Join(quoted, " "), "/dev/null")
+	default:
+		w.t.Skip("no script(1) here")
+	}
+	cmd.Dir = w.cwd
+	cmd.Env = append(w.env(), "COLUMNS=100", "LINES=30")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var out bytes.Buffer
+	cmd.Stdout = &lockedBuffer{mu: &mu, b: &out}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		w.t.Fatalf("script %v: %v", args, err)
+	}
+	screen := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return plain(out.String())
+	}
+	for _, st := range steps {
+		deadline := time.Now().Add(10 * time.Second)
+		for !strings.Contains(screen(), st.expect) {
+			if time.Now().After(deadline) {
+				cmd.Process.Kill()
+				w.t.Fatalf("waited 10s for %q on the terminal; saw:\n%s", st.expect, screen())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if st.send != "" {
+			time.Sleep(50 * time.Millisecond) // let the reader arm
+			if _, err := io.WriteString(stdin, st.send); err != nil {
+				w.t.Fatalf("type %q: %v", st.send, err)
+			}
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err = <-done:
+	case <-time.After(15 * time.Second):
+		cmd.Process.Kill()
+		w.t.Fatalf("still running after the last step; screen:\n%s", screen())
+	}
+	stdin.Close()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		w.t.Fatalf("script %v: %v", args, err)
+	}
+	return result{code: code, stdout: screen()}
+}
+
+type lockedBuffer struct {
+	mu *sync.Mutex
+	b  *bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+// The paste has to land: this is the command that once stored an empty
+// secret and said "stored".
+func TestE2EAccountsSetStoresThePaste(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{
+		{expect: "password data for new item:", send: "sk-ant-oat01-pasted\r"},
+		{expect: "stored under keychain:roscoe-account-primary"},
+	}, "accounts", "set", "primary")
+	expect(t, r, 0, "Paste the token for primary", "minted_at")
+	if got := readFile(filepath.Join(w.kcDir, "roscoe-account-primary")); got != "sk-ant-oat01-pasted" {
+		t.Fatalf("keychain holds %q", got)
+	}
+	// The table now says so, and the hint moves on; the token never shows.
+	tbl := w.run("", "accounts")
+	expect(t, tbl, 0, "yes")
+	if strings.Contains(tbl.all(), "sk-ant-oat01") || strings.Contains(tbl.all(), "roscoe accounts set primary") {
+		t.Errorf("after storing:\n%s", tbl.stdout)
+	}
+
+	// An empty paste stores nothing and says so, and leaves no empty item.
+	r = w.runPTY([]ptyStep{
+		{expect: "password data for new item:", send: "\r"},
+		{expect: "nothing was stored"},
+	}, "accounts", "set", "secondary")
+	if r.code == 0 {
+		t.Errorf("an empty paste exited 0:\n%s", r.stdout)
+	}
+	if _, err := os.Stat(filepath.Join(w.kcDir, "roscoe-account-secondary")); err == nil {
+		t.Error("an empty item was left behind")
+	}
+}
+
+// One chat session through the real terminal: help, a turn through the
+// worker, the cost, and a clean exit.
+func TestE2EChatSession(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	r := w.runPTY([]ptyStep{
+		{expect: "› ", send: "/help\r"},
+		{expect: "/settings", send: "hello there\r"},
+		// The answer streams before the turn is over; the cost line marks
+		// the end, and only then is the next command read as a command.
+		{expect: "0.0123 USD this turn", send: "/cost\r"},
+		{expect: "USD across 1 turns", send: "/exit\r"},
+		{expect: "bye"},
+	}, "chat")
+	expect(t, r, 0, "roscoe chat: bye", "fake answer to: hello there", "0.0123 USD across 1 turns")
+	starts := w.claudeStarts()
+	if len(starts) != 1 || !strings.Contains(starts[0], "-p hello there ") {
+		t.Errorf("chat dispatched %d workers:\n%s", len(starts), strings.Join(starts, "\n"))
+	}
+	// The session is on the books (the about column comes from claude's
+	// transcript, which the fake never writes, so it reads "(no transcript)").
+	sess := w.run("", "sessions")
+	expect(t, sess, 0, "$0.01", "just now")
+	if strings.Count(sess.stdout, "just now") != 1 {
+		t.Errorf("want one session row:\n%s", sess.stdout)
 	}
 }
