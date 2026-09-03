@@ -60,8 +60,17 @@ func startFakeProvider(t *testing.T) *fakeProvider {
 		_ = json.Unmarshal(body, &req)
 		fp.record(r, req.Model)
 		w.Header().Set("Content-Type", "application/json")
+		// The account window, as the API reports it: 12% of the 5-hour
+		// window used, resetting in two hours.
+		now := time.Now()
 		w.Header().Set("anthropic-ratelimit-unified-5h-utilization", "0.12")
-		fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`, req.Model)
+		w.Header().Set("anthropic-ratelimit-unified-5h-reset", fmt.Sprint(now.Add(2*time.Hour).Unix()))
+		w.Header().Set("anthropic-ratelimit-unified-7d-utilization", "0.30")
+		w.Header().Set("anthropic-ratelimit-unified-7d-reset", fmt.Sprint(now.Add(72*time.Hour).Unix()))
+		w.Header().Set("anthropic-ratelimit-unified-overage-status", "rejected")
+		// Big enough usage to price: 200K in and 40K out at DeepInfra's
+		// $0.075 / $0.25 per Mtok is $0.025.
+		fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":200000,"output_tokens":40000}}`, req.Model)
 	}
 	mux.HandleFunc("/an/v1/messages", messages)
 	mux.HandleFunc("/di/anthropic/v1/messages", messages)
@@ -279,4 +288,65 @@ func TestE2ERouterForeground(t *testing.T) {
 	if strings.Contains(log+all, "dk-test-secret") || strings.Contains(log+all, "client-side-key") {
 		t.Fatal("a credential reached the router's output")
 	}
+}
+
+// Tier-3 spend goes through the router, which is the only place it can be
+// priced; a run must show it, book it as priced here, and fold it into the
+// session's cost.
+func TestE2ERunRoutedSpend(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	fp := startFakeProvider(t)
+	w.pointAtFake(fp)
+	w.route = "1"
+
+	r := w.run("", "run", "use the swarm", "--task-id", "t-route")
+	expect(t, r, 0, "[router] deepinfra · 1 requests · 200000 in / 40000 out", "$0.0250",
+		"[router] deepinfra · 5h window 12% used, resets in ", "7d window 30% used", "overage off",
+		"[done] cost=$0.0123")
+	if _, ok := fp.find("/di/anthropic/v1/messages"); !ok {
+		t.Fatalf("the routed request never reached the provider; paths: %v", fp.paths())
+	}
+	ledger := readFile(filepath.Join(w.home, ".roscoe", "runs", "t-route", "events.jsonl"))
+	for _, want := range []string{`"router.totals"`, `"priced_here":true`, `"upstream":"deepinfra"`, `"router.limits"`, `5h window 12% used`} {
+		if !strings.Contains(ledger, want) {
+			t.Errorf("ledger lacks %s", want)
+		}
+	}
+	if strings.Contains(ledger, "dk-test-secret") || strings.Contains(r.all(), "dk-test-secret") {
+		t.Fatal("the provider key leaked")
+	}
+	// The session's cost is the worker's plus the routed spend: 0.0123 + 0.025.
+	expect(t, w.run("", "sessions"), 0, "$0.04")
+	expect(t, w.run("", "top", "--no-fleet"), 0, "today     $0.04", "account   5h window 12% used")
+}
+
+// calibrate --spend runs one warm worker, then a burst, and prices both
+// from the ledgers; with the router in the loop it also reads the rate
+// limits the upstream reported.
+func TestE2ECalibrateSpend(t *testing.T) {
+	w := newWorld(t)
+	w.init()
+	fp := startFakeProvider(t)
+	w.pointAtFake(fp)
+	w.route = "1"
+
+	r := w.run("", "calibrate", "--spend", "--workers", "2")
+	expect(t, r, 0, "[calibrate] one warm worker", "[calibrate] 2 workers at once",
+		"worker     0.", "from start to first request (measured, no tokens)",
+		"warm run   $0.0123", "2 at once  $0.0246", "no rate limiting",
+		"recommend  limits.max_parallel_tasks", "saved to ~/.roscoe/calibration.json")
+	// One start for the start-up probe, one warm, two in the burst.
+	if n := len(w.claudeStarts()); n != 4 {
+		t.Errorf("%d worker starts, want 4:\n%s", n, strings.Join(w.claudeStarts(), "\n"))
+	}
+	// The burst's routed calls reached the provider; the start-up probe's
+	// request went to the local refusing endpoint, not the provider.
+	if n := len(fp.paths()); n != 3 {
+		t.Errorf("provider saw %d calls, want 3: %v", n, fp.paths())
+	}
+	if strings.Contains(r.all(), "dk-test-secret") {
+		t.Fatal("the provider key leaked")
+	}
+	expect(t, w.run("", "top", "--no-fleet"), 0, "calibrated just now")
 }

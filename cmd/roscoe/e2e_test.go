@@ -61,6 +61,7 @@ type world struct {
 	claudeMode string
 	warmDelay  string // seconds the fake waits before its first assistant event
 	resultFile string // when set, the fake's result text is this file's content
+	route      string // "1": the fake worker sends one tier-3 request through the router
 	nodes      string // the fake ssh's machines: one directory per host
 	ledger     string // what a fake node's roscoe run writes as its ledger
 	cfgPath    string
@@ -138,6 +139,13 @@ printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","tools"
 # Interruptible: an interrupted worker must die promptly, as claude does.
 trap 'exit 130' INT TERM
 if [ -n "$FAKE_CLAUDE_WARM_DELAY" ]; then sleep "$FAKE_CLAUDE_WARM_DELAY" & wait $!; fi
+# FAKE_CLAUDE_ROUTE: fan one request out through the router at
+# ANTHROPIC_BASE_URL under the virtual tier-3 name, as a real worker's
+# subagents would, so routed spend shows up on the books.
+if [ -n "$FAKE_CLAUDE_ROUTE" ] && [ -n "$ANTHROPIC_BASE_URL" ]; then
+  curl -s -o /dev/null -X POST "$ANTHROPIC_BASE_URL/v1/messages" -H 'content-type: application/json' \
+    -d '{"model":"roscoe/tier3","max_tokens":8,"messages":[{"role":"user","content":"sub"}]}'
+fi
 echo "assistant $short" >> "$FAKE_CLAUDE_EVENTS"
 printf '{"type":"assistant","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"%s"}],"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30}},"session_id":"%s"}\n' "$model" "$answer" "$sid"
 printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","session_id":"%s","total_cost_usd":0.0123,"num_turns":1,"duration_ms":420,"usage":{"input_tokens":1200,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000,"output_tokens":30},"modelUsage":{"%s":{"inputTokens":1200,"outputTokens":30,"cacheReadInputTokens":40000,"cacheCreationInputTokens":0,"costUSD":0.0123,"contextWindow":200000}}}\n' "$answer" "$sid" "$model"
@@ -953,6 +961,7 @@ func (w *world) env() []string {
 		"FAKE_CLAUDE_EVENTS=" + w.claudeLog + ".events",
 		"FAKE_CLAUDE_WARM_DELAY=" + w.warmDelay,
 		"FAKE_CLAUDE_RESULT_FILE=" + w.resultFile,
+		"FAKE_CLAUDE_ROUTE=" + w.route,
 		"FAKE_NODES=" + w.nodes,
 		"FAKE_NODE_LEDGER=" + w.ledger,
 		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
