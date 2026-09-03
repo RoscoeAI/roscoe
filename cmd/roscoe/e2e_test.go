@@ -30,7 +30,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	roscoeBin = filepath.Join(dir, "roscoe")
-	build := exec.Command("go", "build", "-ldflags", "-X main.Version=v0.0.0-e2e", "-o", roscoeBin, ".")
+	buildArgs := []string{"build", "-ldflags", "-X main.Version=v0.0.0-e2e", "-o", roscoeBin}
+	// ROSCOE_E2E_COVERDIR: instrument the binary so what the e2e suite
+	// exercises counts; every spawned roscoe writes its counters there.
+	if os.Getenv("ROSCOE_E2E_COVERDIR") != "" {
+		buildArgs = append(buildArgs, "-cover", "-coverpkg=./...")
+	}
+	build := exec.Command("go", append(buildArgs, "./cmd/roscoe")...)
+	build.Dir, _ = filepath.Abs("../..")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
 		panic("build roscoe for e2e: " + err.Error() + "\n" + string(out))
@@ -949,6 +956,7 @@ func (w *world) env() []string {
 		"ROSCOE_RELAY_STATE=" + filepath.Join(w.home, ".roscoe", "relay.json"),
 		"TERM=dumb",
 		"NO_COLOR=1",
+		"GOCOVERDIR=" + os.Getenv("ROSCOE_E2E_COVERDIR"),
 	}
 }
 
